@@ -25,11 +25,12 @@ def processar_requisicao(produto: str, filtros: dict):
         print(f"✓ Nicho identificado: {nicho}")
         print(f"✓ POIs sugeridos: {analise['pois_sugeridos']}")
         
-        # Gera regiões ideais com clustering (agora retorna lista de dicts)
+        # Gera regiões ideais com clustering (retorna lista de dicts)
         regioes = gerar_regioes_ideais(produto, filtros, nicho)
         
-        # Gera mapa usando apenas lat/lon/nome
-        mapa = gerar_mapa([(r['lat'], r['lon'], r['nome']) for r in regioes])
+        # Gera mapa interativo com todas as informações
+        # Passa lista completa de dicts para aproveitar score, cluster, etc.
+        mapa = gerar_mapa(regioes, nicho=nicho, produto=produto)
         
         return nicho, mapa, regioes
         
@@ -38,4 +39,4 @@ def processar_requisicao(produto: str, filtros: dict):
         import traceback
         traceback.print_exc()
         # Retorna valores padrão em caso de erro
-        return "Erro", gerar_mapa([]), []
+        return "Erro", gerar_mapa([], nicho="Outro", produto=produto), []

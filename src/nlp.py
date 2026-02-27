@@ -4,9 +4,9 @@ from typing import Dict, List, Optional
 from dotenv import load_dotenv
 from pathlib import Path
 
-# Carrega .env da raiz do projeto usando caminho absoluto
-dotenv_path = Path(r'c:/Users/nicol/Downloads/TCC-Project-dev nov/TCC-Project-dev/.env')
-load_dotenv(dotenv_path=dotenv_path)
+# Carrega .env da raiz do projeto
+dotenv_path = Path(__file__).parent.parent / '.env'
+load_dotenv(dotenv_path=dotenv_path, override=True)
 
 
 # Tenta importar OpenAI
@@ -16,8 +16,17 @@ try:
 except ImportError:
     _openai_imported = False
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_AVAILABLE = _openai_imported and bool(OPENAI_API_KEY)
+def get_openai_key():
+    """Obtém a chave da OpenAI dinamicamente."""
+    return os.getenv("OPENAI_API_KEY")
+
+def is_openai_available():
+    """Verifica se OpenAI está disponível."""
+    return _openai_imported and bool(get_openai_key())
+
+# Mantém para compatibilidade
+OPENAI_API_KEY = get_openai_key()
+OPENAI_AVAILABLE = is_openai_available()
 
 def identificar_nicho(texto: str) -> str:
     """
@@ -163,11 +172,15 @@ def gerar_estrategia_comercial(
         Texto com estratégia comercial detalhada
     """
     if not _openai_imported:
+        print("⚠️ OpenAI não importado")
         return _estrategia_fallback(produto, nicho, regioes, pesos_classe)
 
-    api_key = OPENAI_API_KEY or os.getenv("OPENAI_API_KEY")
+    api_key = get_openai_key()
     if not api_key:
+        print("⚠️ OPENAI_API_KEY não encontrada")
         return _estrategia_fallback(produto, nicho, regioes, pesos_classe)
+    
+    print(f"✓ OpenAI disponível, gerando estratégia com IA...")
 
     try:
         client = OpenAI(api_key=api_key)

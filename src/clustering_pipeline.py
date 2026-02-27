@@ -30,15 +30,57 @@ API_KEY = os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
     print("⚠️  GOOGLE_API_KEY não encontrada no .env - funcionalidades de POI desabilitadas")
 
-# Tipos de lugar por nicho (REDUZIDO para otimização)
+# Tipos de lugar por nicho - ESPECÍFICOS para cada categoria de produto
+PLACES_TYPES_BY_NICHE: Dict[str, Dict[str, List[str]]] = {
+    "Fitness": {
+        "gym": ["gym", "health"],
+        "park": ["park"],
+        "sports": ["stadium", "sports_complex"],
+    },
+    "Infantil": {
+        "school": ["school", "primary_school"],
+        "park": ["park", "playground"],
+        "childcare": ["day_care"],
+    },
+    "Escolar": {
+        "school": ["school", "university"],
+        "library": ["library", "book_store"],
+        "stationery": ["stationery_store"],
+    },
+    "Alimentação": {
+        "supermarket": ["supermarket", "grocery_or_supermarket"],
+        "restaurant": ["restaurant", "cafe", "bakery"],
+    },
+    "Farmácia": {
+        "pharmacy": ["pharmacy", "drugstore"],
+        "health": ["hospital", "doctor"],
+    },
+    "Beleza": {
+        "beauty": ["beauty_salon", "hair_care", "spa"],
+        "shopping": ["shopping_mall", "clothing_store"],
+    },
+    "Pet": {
+        "pet": ["pet_store", "veterinary_care"],
+        "park": ["park"],
+    },
+    "Eletrônicos": {
+        "electronics": ["electronics_store"],
+        "shopping": ["shopping_mall", "department_store"],
+    },
+    "Outro": {
+        "supermarket": ["supermarket"],
+        "shopping": ["shopping_mall"],
+    }
+}
+
+# Fallback genérico (usado se nicho não especificado)
 PLACES_TYPES: Dict[str, List[str]] = {
-    # Apenas os tipos mais relevantes
     "gym": ["gym"],
     "supermarket": ["supermarket"],
 }
 
-# Raios em metros para Nearby Search (REDUZIDO de 3 para 1 raio)
-RADII = [800]  # Apenas raio médio para otimizar
+# Raios em metros para Nearby Search
+RADII = [500, 1000]  # Dois raios para melhor precisão
 
 # Classe socioeconômica -> ordinal
 CLASSE_ORD = {"A":5, "B":4, "C":3, "D":2, "E":1}
@@ -140,14 +182,17 @@ def nearby_count(lat: float, lon: float, place_type: str, radius: int, session: 
     
     return total
 
-def enrich_row_with_pois(row: pd.Series, cache_df: pd.DataFrame, session: requests.Session) -> Tuple[Dict[str,int], List[dict]]:
-    """Enriquece uma linha com POIs, usando cache quando disponível."""
+def enrich_row_with_pois(row: pd.Series, cache_df: pd.DataFrame, session: requests.Session, nicho: str = "Outro") -> Tuple[Dict[str,int], List[dict]]:
+    """Enriquece uma linha com POIs específicos do nicho, usando cache quando disponível."""
     try:
         lat, lon = float(row["lat"]), float(row["lon"])
         new_records = []
         results: Dict[str,int] = {}
         
-        for label, types in PLACES_TYPES.items():
+        # USA POIs ESPECÍFICOS DO NICHO!
+        places_types = PLACES_TYPES_BY_NICHE.get(nicho, PLACES_TYPES_BY_NICHE["Outro"])
+        
+        for label, types in places_types.items():
             for radius in RADII:
                 subtotal = 0
                 for tp in types:
@@ -327,7 +372,8 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
             max_locais = min(10, len(locais_unicos))
             locais_amostra = locais_unicos.head(max_locais)
             
-            print(f"📊 Enriquecendo {max_locais} localizações representativas (de {len(df)} registros)")
+            print(f"📊 Enriquecendo {max_locais} localizações para nicho '{nicho}'")
+            print(f"🔍 POIs buscados: {list(PLACES_TYPES_BY_NICHE.get(nicho, PLACES_TYPES_BY_NICHE['Outro']).keys())}")
             print(f"⏱️  Tempo estimado: ~{max_locais * 2} segundos")
             
             cache = load_cache()
@@ -340,7 +386,8 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
             
             for idx, row in locais_amostra.iterrows():
                 try:
-                    feats, new_records = enrich_row_with_pois(row, cache, sess)
+                    # PASSA O NICHO PARA BUSCAR POIs ESPECÍFICOS!
+                    feats, new_records = enrich_row_with_pois(row, cache, sess, nicho=nicho)
                     pois_por_local[(row['lat_round'], row['lon_round'])] = feats
                     
                     if new_records:
@@ -374,12 +421,15 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
         elif usar_api and not API_KEY:
             print("⚠️ API solicitada mas GOOGLE_API_KEY não configurada no .env")
         
-        # Se não tem POIs, cria colunas zeradas
+        # Se não tem POIs, cria colunas zeradas ESPECÍFICAS DO NICHO
         poi_cols_existentes = [c for c in df.columns if c.startswith("poi_") and c.endswith("m")]
         if not poi_cols_existentes:
-            for label in PLACES_TYPES:
+            # Usa POIs do nicho específico!
+            places_types = PLACES_TYPES_BY_NICHE.get(nicho, PLACES_TYPES_BY_NICHE["Outro"])
+            for label in places_types:
                 for r in RADII:
                     df[f"poi_{label}_{r}m"] = 0
+            print(f"📍 POIs zerados criados para nicho '{nicho}': {list(places_types.keys())}")
 
         df_filtrado = df.copy()
         if filtros.get("classe") and len(filtros["classe"]) > 0:

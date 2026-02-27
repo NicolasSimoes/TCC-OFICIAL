@@ -266,11 +266,11 @@ if enviar:
         
         # NÃO gera estratégia automaticamente (será gerada sob demanda na aba)
         # Salva resultados no session_state SEM estratégia ainda
+        # NOTA: Não salvamos o mapa diretamente - ele será regenerado a partir das regiões
         st.session_state.resultados = {
             'produto': produto,
             'analise': analise,
             'nicho': nicho,
-            'mapa': mapa,
             'regioes': regioes,
             'estrategia': None  # Será gerada sob demanda
         }
@@ -307,6 +307,20 @@ if st.session_state.resultados is not None:
     
     st.markdown("---")
     
+    # === MAPA PRIMEIRO (sempre visível) ===
+    st.markdown("### 🗺️ Mapa de Regiões Ideais")
+    
+    # Regenera o mapa a partir das regiões (mais estável que salvar objeto Folium)
+    from map import gerar_mapa
+    regioes_para_mapa = res.get('regioes', [])
+    if regioes_para_mapa:
+        mapa_atual = gerar_mapa(regioes_para_mapa, nicho=res.get('nicho', 'Outro'), produto=res.get('produto', ''))
+        st_folium(mapa_atual, width=1200, height=600, returned_objects=[], key="mapa_principal")
+    else:
+        st.warning("⚠️ Nenhuma região encontrada. Ajuste os filtros e tente novamente.")
+    
+    st.markdown("---")
+    
     # === ESTRATÉGIA COMERCIAL APRIMORADA ===
     st.markdown("### 💡 Estratégia Comercial Inteligente")
     
@@ -315,20 +329,22 @@ if st.session_state.resultados is not None:
         # Verifica se usuário quer gerar a estratégia
         col_gerar, col_info = st.columns([2, 8])
         with col_gerar:
-            if st.button("🚀 Gerar Estratégia", key="gerar_estrategia", type="primary"):
-                with st.spinner("💡 Gerando estratégia comercial com IA..."):
-                    estrategia = gerar_estrategia_comercial(
-                        produto=res['produto'],
-                        nicho=res['analise']['nicho'],
-                        regioes=res['regioes'],
-                        pesos_classe=res['analise']['pesos_classe'],
-                        filtros={}
-                    )
-                    # Salva no session_state
-                    st.session_state.resultados['estrategia'] = estrategia
-                    st.rerun()
+            gerar_btn = st.button("🚀 Gerar Estratégia Detalhada", key="gerar_estrategia", type="primary")
         with col_info:
             st.info("👆 Clique para gerar estratégia comercial personalizada com IA (OpenAI)")
+        
+        # Gera estratégia quando botão é clicado
+        if gerar_btn:
+            with st.spinner("💡 Gerando estratégia comercial com IA... Aguarde ~10 segundos"):
+                estrategia = gerar_estrategia_comercial(
+                    produto=res['produto'],
+                    nicho=res['analise']['nicho'],
+                    regioes=res['regioes'],
+                    pesos_classe=res['analise']['pesos_classe'],
+                    filtros={}
+                )
+                st.session_state.resultados['estrategia'] = estrategia
+                st.rerun()
         
         # Mostra preview básico enquanto não gera
         with st.expander("📋 Preview da Estratégia Básica"):
@@ -346,7 +362,6 @@ if st.session_state.resultados is not None:
             
             💡 Clique em "Gerar Estratégia" para análise completa com IA
             """)
-        # Não continua se estratégia não foi gerada
     
     elif res.get('estrategia'):
         # Tabs para organizar melhor a estratégia
@@ -566,16 +581,6 @@ if st.session_state.resultados is not None:
             - Indicações de clientes satisfeitos
             """)
     
-    st.markdown("---")
-    
-    # Mapa
-    st.markdown("### 🗺️ Mapa de Regiões Ideais")
-    if res['mapa']:
-        # returned_objects é None para evitar rerun infinito
-        st_folium(res['mapa'], width=1200, height=600, returned_objects=[], key=f"mapa_{hash(res['produto'])}")
-    else:
-        st.warning("⚠️ Não foi possível gerar o mapa. Verifique os filtros aplicados.")
-
     # Análise Estratégica de Regiões
     st.markdown("---")
     st.markdown("### 🎯 Análise Estratégica de Mercado")
