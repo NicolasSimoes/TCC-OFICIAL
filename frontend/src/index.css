@@ -1,0 +1,121 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 222 47% 11%;
+    --foreground: 210 40% 98%;
+    --card: 217 33% 17%;
+    --card-foreground: 210 40% 98%;
+    --popover: 217 33% 17%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 142 71% 45%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 33% 17%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 210 40% 98%;
+    --info: 217 91% 60%;
+    --info-foreground: 210 40% 98%;
+    --border: 217 33% 26%;
+    --input: 217 33% 26%;
+    --ring: 142 71% 45%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--background));
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--border));
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground));
+}
+
+/* Leaflet overrides for dark theme */
+.leaflet-container {
+  background: hsl(var(--card));
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+.leaflet-popup-content-wrapper {
+  background: hsl(217 33% 17%);
+  color: hsl(210 40% 98%);
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.3);
+}
+
+.leaflet-popup-tip {
+  background: hsl(217 33% 17%);
+}
+
+.leaflet-popup-content {
+  margin: 12px 16px;
+}
+
+.leaflet-control-zoom a {
+  background: hsl(217 33% 17%) !important;
+  color: hsl(210 40% 98%) !important;
+  border-color: hsl(217 33% 26%) !important;
+}
+
+.leaflet-control-zoom a:hover {
+  background: hsl(217 33% 22%) !important;
+}
+
+.leaflet-control-attribution {
+  background: hsl(222 47% 11% / 0.8) !important;
+  color: hsl(215 20% 65%) !important;
+  font-size: 10px;
+}
+
+.leaflet-control-attribution a {
+  color: hsl(142 71% 45%) !important;
+}
+
+/* Animation utilities */
+.animate-count-up {
+  animation: countUp 1.5s ease-out forwards;
+}
+
+@keyframes countUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Focus visible styles */
+.focus-visible-ring:focus-visible {
+  @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-background;
+}
