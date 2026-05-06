@@ -1,1 +1,28 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+*.egg-info/
+
+# Env / secrets
 .env
+
+# Cache de POIs
+cache_places.parquet
+src/cache_places.parquet
+
+# Node / Frontend
+node_modules/
+frontend/dist/
+frontend/node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# Artefatos soltos
+mapa_*.html

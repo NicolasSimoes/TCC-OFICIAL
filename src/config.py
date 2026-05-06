@@ -32,56 +32,55 @@ PLACES_API_CONFIG = {
 }
 
 # Raios de busca de POIs (em metros)
-SEARCH_RADII = [400, 800, 1200]
+# Valores enxutos (2 raios) para reduzir consumo de quota Google Places.
+SEARCH_RADII = [500, 1000]
 
-# Tipos de POIs por nicho
+# Tipos de POIs por nicho (single source of truth para todo o pipeline)
 PLACES_TYPES_BY_NICHE = {
     "Fitness": {
         "gym": ["gym", "health"],
-        "office": ["bank", "real_estate_agency", "insurance_agency", "lawyer"],
-        "university": ["university"],
-        "supermarket": ["supermarket", "grocery_or_supermarket"],
+        "park": ["park"],
+        "sports": ["stadium", "sports_complex"],
     },
     "Infantil": {
         "school": ["school", "primary_school"],
-        "park": ["park"],
-        "supermarket": ["supermarket", "grocery_or_supermarket"],
-        "health": ["hospital", "doctor"],
+        "park": ["park", "playground"],
+        "childcare": ["day_care"],
     },
     "Escolar": {
         "school": ["school", "university"],
         "library": ["library", "book_store"],
-        "office": ["bank", "real_estate_agency"],
-        "supermarket": ["supermarket"],
+        "stationery": ["stationery_store"],
     },
     "Alimentação": {
         "supermarket": ["supermarket", "grocery_or_supermarket"],
         "restaurant": ["restaurant", "cafe", "bakery"],
-        "office": ["bank", "real_estate_agency"],
     },
     "Farmácia": {
-        "health": ["pharmacy", "drugstore", "hospital", "doctor"],
-        "supermarket": ["supermarket"],
-        "office": ["bank"],
+        "pharmacy": ["pharmacy", "drugstore"],
+        "health": ["hospital", "doctor"],
     },
     "Beleza": {
         "beauty": ["beauty_salon", "hair_care", "spa"],
-        "shopping": ["shopping_mall", "department_store"],
-        "office": ["bank"],
+        "shopping": ["shopping_mall", "clothing_store"],
     },
     "Pet": {
         "pet": ["pet_store", "veterinary_care"],
         "park": ["park"],
-        "supermarket": ["supermarket"],
     },
     "Eletrônicos": {
-        "electronics": ["electronics_store", "home_goods_store"],
+        "electronics": ["electronics_store"],
         "shopping": ["shopping_mall", "department_store"],
-        "office": ["bank", "real_estate_agency"],
     },
     "Outro": {
-        "general": ["supermarket", "shopping_mall", "store"],
-    }
+        "supermarket": ["supermarket"],
+        "shopping": ["shopping_mall"],
+    },
+    "Saúde": {
+        "health": ["hospital", "doctor", "physiotherapist"],
+        "pharmacy": ["pharmacy", "drugstore"],
+        "dental": ["dentist"],
+    },
 }
 
 # Tipo padrão para clustering

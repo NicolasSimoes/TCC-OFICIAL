@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { Eye, ChevronDown, ChevronUp } from 'lucide-react';
+import { Eye } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,6 +16,22 @@ interface StrategyTabsProps {
   onFocusRegion: (region: Region) => void;
 }
 
+/** Converte markdown simples (##, **, *, ---, listas) em HTML legível */
+function renderMarkdown(text: string): string {
+  return text
+    .replace(/---+/g, '<hr class="my-3 border-border" />')
+    .replace(/^### (.+)$/gm, '<h4 class="font-semibold text-sm mt-4 mb-1">$1</h4>')
+    .replace(/^## (.+)$/gm, '<h3 class="font-semibold text-base mt-4 mb-1">$1</h3>')
+    .replace(/^# (.+)$/gm, '<h2 class="font-bold text-lg mt-4 mb-1">$1</h2>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`(.+?)`/g, '<code class="bg-muted px-1 rounded text-xs">$1</code>')
+    .replace(/^(\d+)\. (.+)$/gm, '<li class="ml-4 list-decimal">$2</li>')
+    .replace(/^[-*] (.+)$/gm, '<li class="ml-4 list-disc">$1</li>')
+    .replace(/\n{2,}/g, '<br /><br />')
+    .replace(/\n/g, '<br />');
+}
+
 // Tab: Resumo Executivo
 function ExecutiveSummaryTab({ strategy }: { strategy: Strategy }) {
   return (
@@ -29,9 +44,10 @@ function ExecutiveSummaryTab({ strategy }: { strategy: Strategy }) {
       </Card>
       <Card className="p-4">
         <h3 className="font-semibold mb-2">Visão Executiva</h3>
-        <p className="text-sm text-muted-foreground leading-relaxed">
-          {strategy.executiveSummary}
-        </p>
+        <div
+          className="text-sm text-muted-foreground leading-relaxed prose-sm"
+          dangerouslySetInnerHTML={{ __html: renderMarkdown(strategy.executiveSummary) }}
+        />
       </Card>
       <Card className="p-4">
         <h3 className="font-semibold mb-2">Potencial de Mercado</h3>

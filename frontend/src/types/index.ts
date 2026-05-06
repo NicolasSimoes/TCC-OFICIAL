@@ -12,6 +12,17 @@ export interface Region {
   competitors: number;
 }
 
+export interface ClusteringMetrics {
+  algoritmo?: string;
+  justificativa?: string;
+  silhouette?: number;
+  davies_bouldin?: number;
+  n_clusters?: number;
+  elbow?: Record<string, number>;
+  kmeans_silhouette?: number;
+  dbscan_silhouette?: number;
+}
+
 export interface AnalysisResult {
   product: string;
   niche: string;
@@ -24,6 +35,10 @@ export interface AnalysisResult {
   actionPlan: ActionItem[];
   strategy: Strategy;
   demographics: Demographics;
+  // Métricas ML da API
+  metricas_clustering?: ClusteringMetrics;
+  nlp_confianca?: number;
+  nlp_metodo?: string;
 }
 
 export interface ActionItem {

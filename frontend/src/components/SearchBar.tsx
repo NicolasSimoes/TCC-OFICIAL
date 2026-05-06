@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Search, Send, Loader2 } from 'lucide-react';
+import { Search, Loader2, MapPin } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Progress } from '@/components/ui/progress';
@@ -7,7 +7,7 @@ import { searchSuggestions } from '@/lib/mock-data';
 import { motion, AnimatePresence } from 'framer-motion';
 
 interface SearchBarProps {
-  onSearch: (query: string) => void;
+  onSearch: (query: string, usarApi: boolean) => void;
   isLoading: boolean;
 }
 
@@ -16,6 +16,7 @@ export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [filteredSuggestions, setFilteredSuggestions] = useState<string[]>([]);
   const [progress, setProgress] = useState(0);
+  const [usarApi, setUsarApi] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
@@ -62,7 +63,7 @@ export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (query.trim() && !isLoading) {
-      onSearch(query.trim());
+      onSearch(query.trim(), usarApi);
       setShowSuggestions(false);
     }
   };
@@ -74,66 +75,73 @@ export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
   };
 
   return (
-    <div ref={wrapperRef} className="relative w-full max-w-3xl mx-auto">
-      <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3">
+    <div ref={wrapperRef} className="relative w-full max-w-2xl mx-auto">
+      <form onSubmit={handleSubmit} className="flex gap-2">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             ref={inputRef}
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onFocus={() => setShowSuggestions(true)}
-            placeholder="Digite o nome do seu produto/serviço e a localidade"
-            className="h-12 pl-10 pr-4 text-base"
+            placeholder="Ex: whey protein, fralda, notebook..."
+            className="h-11 pl-9 pr-4 text-sm bg-white border-border shadow-sm"
             disabled={isLoading}
-            aria-label="Buscar produto ou serviço"
+            aria-label="Buscar produto"
           />
         </div>
         <Button
           type="submit"
-          size="lg"
-          className="h-12 px-6 sm:w-auto w-full"
+          className="h-11 px-5 text-sm"
           disabled={isLoading || !query.trim()}
         >
           {isLoading ? (
-            <>
-              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              Analisando...
-            </>
+            <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Analisando</>
           ) : (
-            <>
-              <Send className="mr-2 h-5 w-5" />
-              Enviar
-            </>
+            'Analisar'
           )}
         </Button>
       </form>
 
-      {/* Dropdown de sugestões */}
+      {/* Toggle Google Places API */}
+      <div className="mt-2 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setUsarApi(v => !v)}
+          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors focus:outline-none ${usarApi ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+          aria-pressed={usarApi}
+        >
+          <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${usarApi ? 'translate-x-4' : 'translate-x-0'}`} />
+        </button>
+        <label className="flex items-center gap-1 text-xs text-muted-foreground cursor-pointer select-none" onClick={() => setUsarApi(v => !v)}>
+          <MapPin className="h-3 w-3" />
+          Enriquecer com Google Places API
+          {usarApi && <span className="ml-1 text-amber-500 font-medium">(+15–30s)</span>}
+        </label>
+      </div>
+
+      {/* Sugestões */}
       <AnimatePresence>
         {showSuggestions && filteredSuggestions.length > 0 && !isLoading && (
           <motion.div
-            initial={{ opacity: 0, y: -10 }}
+            initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.15 }}
-            className="absolute top-full left-0 right-0 z-50 mt-2 rounded-lg border bg-card shadow-lg sm:right-auto sm:w-[calc(100%-100px)]"
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.1 }}
+            className="absolute top-full left-0 z-50 mt-1 w-full rounded-lg border bg-white shadow-md"
           >
-            <ul className="py-2">
-              {filteredSuggestions.map((suggestion, index) => (
+            <ul className="py-1">
+              {filteredSuggestions.map((suggestion) => (
                 <li key={suggestion}>
                   <button
                     type="button"
                     onClick={() => handleSuggestionClick(suggestion)}
-                    className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm hover:bg-accent transition-colors"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted transition-colors"
                   >
-                    <Search className="h-4 w-4 text-muted-foreground" />
+                    <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                     <span>{suggestion}</span>
                   </button>
-                  {index < filteredSuggestions.length - 1 && (
-                    <div className="mx-4 border-b border-border/50" />
-                  )}
                 </li>
               ))}
             </ul>
@@ -141,20 +149,17 @@ export function SearchBar({ onSearch, isLoading }: SearchBarProps) {
         )}
       </AnimatePresence>
 
-      {/* Loading state */}
+      {/* Progress */}
       <AnimatePresence>
         {isLoading && (
           <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="mt-4 space-y-3"
+            className="mt-3"
           >
-            <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin text-primary" />
-              <span>Analisando mercado... ~15 segundos</span>
-            </div>
-            <Progress value={progress} className="h-2" />
+            <Progress value={progress} className="h-1" />
+            <p className="mt-2 text-center text-xs text-muted-foreground">Processando pipeline ML…</p>
           </motion.div>
         )}
       </AnimatePresence>

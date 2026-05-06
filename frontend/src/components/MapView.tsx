@@ -3,7 +3,7 @@ import { MapContainer, TileLayer, CircleMarker, Popup, useMap, ZoomControl } fro
 import { Maximize2, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Region } from '@/types';
-import { cn } from '@/lib/utils';
+
 import 'leaflet/dist/leaflet.css';
 
 interface MapViewProps {

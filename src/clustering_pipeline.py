@@ -13,14 +13,22 @@ from urllib3.util.retry import Retry
 
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
-from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.cluster import KMeans, DBSCAN
+from sklearn.metrics import silhouette_score, davies_bouldin_score
+from sklearn.neighbors import NearestNeighbors
 
 import folium
 from folium.plugins import HeatMap
 from branca.colormap import LinearColormap
 
 from data_loader import carregar_e_preparar_dados, normalize_header
+from config import (
+    PLACES_TYPES_BY_NICHE,
+    SEARCH_RADII as RADII,
+    CLASS_ORDINAL as CLASSE_ORD,
+    CACHE_CONFIG,
+    PLACES_API_CONFIG,
+)
 
 # =========================
 # CONFIG
@@ -30,63 +38,12 @@ API_KEY = os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
     print("⚠️  GOOGLE_API_KEY não encontrada no .env - funcionalidades de POI desabilitadas")
 
-# Tipos de lugar por nicho - ESPECÍFICOS para cada categoria de produto
-PLACES_TYPES_BY_NICHE: Dict[str, Dict[str, List[str]]] = {
-    "Fitness": {
-        "gym": ["gym", "health"],
-        "park": ["park"],
-        "sports": ["stadium", "sports_complex"],
-    },
-    "Infantil": {
-        "school": ["school", "primary_school"],
-        "park": ["park", "playground"],
-        "childcare": ["day_care"],
-    },
-    "Escolar": {
-        "school": ["school", "university"],
-        "library": ["library", "book_store"],
-        "stationery": ["stationery_store"],
-    },
-    "Alimentação": {
-        "supermarket": ["supermarket", "grocery_or_supermarket"],
-        "restaurant": ["restaurant", "cafe", "bakery"],
-    },
-    "Farmácia": {
-        "pharmacy": ["pharmacy", "drugstore"],
-        "health": ["hospital", "doctor"],
-    },
-    "Beleza": {
-        "beauty": ["beauty_salon", "hair_care", "spa"],
-        "shopping": ["shopping_mall", "clothing_store"],
-    },
-    "Pet": {
-        "pet": ["pet_store", "veterinary_care"],
-        "park": ["park"],
-    },
-    "Eletrônicos": {
-        "electronics": ["electronics_store"],
-        "shopping": ["shopping_mall", "department_store"],
-    },
-    "Outro": {
-        "supermarket": ["supermarket"],
-        "shopping": ["shopping_mall"],
-    }
-}
-
 # Fallback genérico (usado se nicho não especificado)
-PLACES_TYPES: Dict[str, List[str]] = {
-    "gym": ["gym"],
-    "supermarket": ["supermarket"],
-}
-
-# Raios em metros para Nearby Search
-RADII = [500, 1000]  # Dois raios para melhor precisão
-
-# Classe socioeconômica -> ordinal
-CLASSE_ORD = {"A":5, "B":4, "C":3, "D":2, "E":1}
+PLACES_TYPES: Dict[str, List[str]] = PLACES_TYPES_BY_NICHE["Outro"]
 
 # Cache local das consultas à API (para economizar cota)
-CACHE_PATH = Path("cache_places.parquet")
+CACHE_PATH = Path(CACHE_CONFIG["cache_file"])
+CACHE_MAX_AGE_SECONDS = int(CACHE_CONFIG.get("max_age_days", 30)) * 86400
 
 # =========================
 # UTIL
@@ -96,11 +53,21 @@ def hkey(lat: float, lon: float, place_type: str, radius: int) -> str:
     return hashlib.md5(s.encode()).hexdigest()
 
 def load_cache() -> pd.DataFrame:
-    if CACHE_PATH.exists():
-        return pd.read_parquet(CACHE_PATH)
-    return pd.DataFrame(columns=["h","lat","lon","type","radius","count","ts"])
+    """Carrega cache de POIs aplicando TTL configurado em CACHE_CONFIG."""
+    if not CACHE_PATH.exists():
+        return pd.DataFrame(columns=["h", "lat", "lon", "type", "radius", "count", "ts"])
+    df = pd.read_parquet(CACHE_PATH)
+    if "ts" in df.columns and CACHE_MAX_AGE_SECONDS > 0:
+        agora = int(time.time())
+        antes = len(df)
+        df = df[(agora - df["ts"].astype("int64")) <= CACHE_MAX_AGE_SECONDS].copy()
+        descartados = antes - len(df)
+        if descartados > 0:
+            print(f"♻️  Cache: {descartados} entradas expiradas removidas (TTL={CACHE_MAX_AGE_SECONDS // 86400}d)")
+    return df
 
 def save_cache(df: pd.DataFrame) -> None:
+    CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(CACHE_PATH, index=False)
 
 def create_session_with_retry() -> requests.Session:
@@ -267,6 +234,26 @@ def build_features(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str], List[str]
     poi_norm_cols = [c for c in df.columns if c.startswith("poi_") and c.endswith("_norm")]
     num_cols = ["classe_ord"] + poi_norm_cols
     cat_cols = ["tipo_comercial"]
+
+    # Adiciona coordenadas geográficas quando POIs não têm dados reais.
+    # Isso garante que o KMeans crie clusters espacialmente distintos (por bairro)
+    # mesmo sem a Google Places API, em vez de agrupar só por classe social.
+    if "lat" in df.columns and "lon" in df.columns:
+        poi_raw_cols = [c for c in df.columns if c.startswith("poi_") and c.endswith("m") and not c.endswith("_norm")]
+        poi_data_sum = float(df[poi_raw_cols].sum().sum()) if poi_raw_cols else 0.0
+        if poi_data_sum == 0.0:
+            for coord in ["lat", "lon"]:
+                vmin, vmax = float(df[coord].min()), float(df[coord].max())
+                denom = vmax - vmin
+                df[f"{coord}_feat"] = ((df[coord] - vmin) / denom) if denom > 1e-8 else 0.0
+            # Cria cópia das features com nome diferente para simular peso 2×
+            # (ColumnTransformer exige nomes de coluna únicos)
+            df["lat_feat2"] = df["lat_feat"]
+            df["lon_feat2"] = df["lon_feat"]
+            num_cols = num_cols + ["lat_feat", "lon_feat", "lat_feat2", "lon_feat2"]
+
+    num_cols = [c for c in num_cols if c in df.columns]
+    cat_cols  = [c for c in cat_cols  if c in df.columns]
     return df, num_cols, cat_cols
 
 # =========================
@@ -278,18 +265,221 @@ def fit_kmeans(X: np.ndarray, n_clusters: int, random_state: int = 42) -> KMeans
     km.fit(X)
     return km
 
+
+# =========================
+# MÉTRICAS DE AVALIAÇÃO
+# =========================
+def calcular_metricas_clustering(X: np.ndarray, labels: np.ndarray) -> Dict:
+    """
+    Calcula métricas de qualidade do clustering para avaliação acadêmica.
+
+    - Silhouette Score  : [-1, 1]. Quanto mais próximo de 1, melhor a separação.
+    - Davies-Bouldin    : [0, ∞). Quanto menor, mais compactos e separados os clusters.
+    - Inertia (SSE)     : soma dos quadrados intra-cluster (base do Elbow Method).
+
+    Returns:
+        dict com as métricas calculadas
+    """
+    n_clusters = len(set(labels)) - (1 if -1 in labels else 0)
+    resultado = {"n_clusters": int(n_clusters)}
+
+    if n_clusters < 2 or X.shape[0] <= n_clusters:
+        resultado.update({"silhouette": None, "davies_bouldin": None, "inertia": None})
+        return resultado
+
+    # Ignora pontos de ruído do DBSCAN (label == -1)
+    mascara = labels != -1
+    if mascara.sum() <= n_clusters:
+        resultado.update({"silhouette": None, "davies_bouldin": None, "inertia": None})
+        return resultado
+
+    X_limpo = X[mascara]
+    labels_limpo = labels[mascara]
+
+    try:
+        sil = float(silhouette_score(X_limpo, labels_limpo, sample_size=min(500, len(X_limpo))))
+        resultado["silhouette"] = round(sil, 4)
+    except Exception:
+        resultado["silhouette"] = None
+
+    try:
+        db = float(davies_bouldin_score(X_limpo, labels_limpo))
+        resultado["davies_bouldin"] = round(db, 4)
+    except Exception:
+        resultado["davies_bouldin"] = None
+
+    resultado["inertia"] = None
+    return resultado
+
+
+def calcular_elbow(X: np.ndarray, k_range: range = range(2, 7)) -> Dict:
+    """
+    Executa o Elbow Method calculando inércia para diferentes valores de k.
+    Usado para justificar academicamente a escolha do número de clusters.
+
+    Returns:
+        dict {k: inertia} para cada k testado
+    """
+    elbow = {}
+    for k in k_range:
+        if X.shape[0] <= k:
+            break
+        km = KMeans(n_clusters=k, n_init=5, max_iter=100, random_state=42)
+        km.fit(X)
+        elbow[int(k)] = round(float(km.inertia_), 2)
+    return elbow
+
+
+def _knee_point(elbow: Dict[int, float]) -> int:
+    """
+    Detecta o cotovelo ótimo da curva de inércia pelo método de máxima distância.
+
+    Para cada k, calcula a distância perpendicular entre o ponto e a linha
+    que une o primeiro e o último ponto da curva. O k com maior distância
+    é o cotovelo ideal (máxima variação de curvatura).
+
+    Referência: Satopää, 1984 — "Finding a 'Kneedle' in a Haystack"
+    """
+    if len(elbow) < 3:
+        return min(elbow.keys())
+    ks = sorted(elbow.keys())
+    inertias = [elbow[k] for k in ks]
+    # Normaliza para [0, 1]
+    i_min, i_max = min(inertias), max(inertias)
+    if i_max == i_min:
+        return ks[0]
+    norm_y = [(v - i_min) / (i_max - i_min) for v in inertias]
+    norm_x = [(k - ks[0]) / (ks[-1] - ks[0]) for k in ks]
+    # Distância de cada ponto à reta entre primeiro e último ponto
+    x0, y0 = norm_x[0], norm_y[0]
+    x1, y1 = norm_x[-1], norm_y[-1]
+    dx, dy = x1 - x0, y1 - y0
+    dists = [
+        abs(dy * (norm_x[i] - x0) - dx * (norm_y[i] - y0))
+        for i in range(len(ks))
+    ]
+    return ks[dists.index(max(dists))]
+
+
+def estimar_eps_dbscan(X: np.ndarray, min_samples: int = 5) -> float:
+    """
+    Estima o parâmetro eps do DBSCAN pelo método k-NN (cotovelo da curva
+    de distâncias ao k-ésimo vizinho mais próximo).
+
+    Referência: Ester et al. (1996) — artigo original do DBSCAN.
+    """
+    k = min(min_samples, X.shape[0] - 1)
+    nbrs = NearestNeighbors(n_neighbors=k).fit(X)
+    distancias, _ = nbrs.kneighbors(X)
+    distancias_sorted = np.sort(distancias[:, -1])
+    # Retorna o valor no "cotovelo" (~85º percentil)
+    eps = float(np.percentile(distancias_sorted, 85))
+    return max(eps, 0.05)   # mínimo 0.05 para evitar eps=0
+
+
+def comparar_kmeans_dbscan(X: np.ndarray, n_clusters: int) -> Dict:
+    """
+    Compara KMeans vs DBSCAN e retorna o melhor algoritmo com justificativa.
+
+    Critério: Silhouette Score (maior = melhor separação de clusters).
+    Em caso de empate ou DBSCAN sem clusters válidos, KMeans é preferido
+    por ser mais determinístico e interpretável.
+
+    Returns:
+        {
+          "melhor_algoritmo": str,
+          "justificativa": str,
+          "kmeans": {silhouette, davies_bouldin, n_clusters},
+          "dbscan": {silhouette, davies_bouldin, n_clusters, eps, min_samples},
+          "labels_escolhidos": np.ndarray
+        }
+    """
+    # --- KMeans ---
+    km = fit_kmeans(X, n_clusters)
+    labels_km = km.labels_
+    metricas_km = calcular_metricas_clustering(X, labels_km)
+    metricas_km["inertia"] = round(float(km.inertia_), 2)
+
+    # --- DBSCAN ---
+    min_samples = max(3, X.shape[0] // 20)
+    eps = estimar_eps_dbscan(X, min_samples)
+    db = DBSCAN(eps=eps, min_samples=min_samples)
+    labels_db = db.fit_predict(X)
+    n_clusters_db = len(set(labels_db)) - (1 if -1 in labels_db else 0)
+    metricas_db = calcular_metricas_clustering(X, labels_db)
+    metricas_db.update({"eps": round(eps, 4), "min_samples": int(min_samples)})
+
+    # --- Decisão ---
+    sil_km = metricas_km.get("silhouette") or -1
+    sil_db = metricas_db.get("silhouette") or -1
+
+    # Detecta clusters triviais do DBSCAN (clusters com 1 ponto têm silhouette=1 automaticamente)
+    labels_db_validos = labels_db[labels_db != -1]
+    n_noise = int(np.sum(labels_db == -1))
+    cobertura = len(labels_db_validos) / len(labels_db) if len(labels_db) > 0 else 0
+    if len(labels_db_validos) > 0:
+        _, contagens = np.unique(labels_db_validos, return_counts=True)
+        media_cluster = float(np.mean(contagens))
+        cluster_trivial = media_cluster < 3 or cobertura < 0.60  # < 60% cobertura = muito ruído
+    else:
+        cluster_trivial = True
+
+    if n_clusters_db < 2 or cluster_trivial:
+        melhor = "KMeans"
+        if cluster_trivial:
+            justificativa = (
+                f"DBSCAN cobriu apenas {cobertura*100:.0f}% dos dados como clusters "
+                f"(eps={eps:.3f}, {n_noise} pontos de ruído). "
+                f"KMeans selecionado por melhor cobertura geográfica."
+            )
+        else:
+            justificativa = (
+                f"DBSCAN não formou clusters válidos (eps={eps:.3f}, "
+                f"min_samples={min_samples}). KMeans selecionado."
+            )
+        labels_finais = labels_km
+    elif sil_db > sil_km + 0.05:
+        melhor = "DBSCAN"
+        justificativa = (
+            f"DBSCAN obteve Silhouette={sil_db:.3f} vs KMeans={sil_km:.3f} "
+            f"(+{sil_db - sil_km:.3f}). DBSCAN selecionado."
+        )
+        labels_finais = labels_db
+    else:
+        melhor = "KMeans"
+        justificativa = (
+            f"KMeans (Silhouette={sil_km:.3f}) equivalente ou superior a "
+            f"DBSCAN (Silhouette={sil_db:.3f}). KMeans preferido por "
+            f"interpretabilidade e clusters balanceados."
+        )
+        labels_finais = labels_km
+
+    print(f"\n📊 Comparação de algoritmos:")
+    print(f"   KMeans  → Silhouette={sil_km:.3f}, Davies-Bouldin={metricas_km.get('davies_bouldin', '?')}")
+    print(f"   DBSCAN  → Silhouette={sil_db:.3f}, clusters={n_clusters_db}, eps={eps:.3f}")
+    print(f"   ✓ Selecionado: {melhor} — {justificativa}")
+
+    return {
+        "melhor_algoritmo": melhor,
+        "justificativa": justificativa,
+        "kmeans": metricas_km,
+        "dbscan": metricas_db,
+        "labels_escolhidos": labels_finais,
+    }
+
 def get_pesos_score_por_nicho(nicho: str):
-    # Pesos dinâmicos por nicho
+    # Pesos dinâmicos por nicho — (peso_poi, peso_classe)
     pesos = {
-        "Infantil": (0.8, 0.2),
-        "Fitness": (0.7, 0.3),
-        "Escolar": (0.7, 0.3),
+        "Infantil":    (0.8, 0.2),
+        "Fitness":     (0.7, 0.3),
+        "Escolar":     (0.7, 0.3),
         "Alimentação": (0.6, 0.4),
-        "Farmácia": (0.6, 0.4),
-        "Beleza": (0.5, 0.5),
-        "Pet": (0.7, 0.3),
+        "Farmácia":    (0.6, 0.4),
+        "Beleza":      (0.5, 0.5),
+        "Pet":         (0.7, 0.3),
         "Eletrônicos": (0.6, 0.4),
-        "Outro": (0.6, 0.4)
+        "Saúde":       (0.6, 0.4),  # Serviços de saúde: POI relevante + classe social
+        "Outro":       (0.6, 0.4),
     }
     return pesos.get(nicho, (0.6, 0.4))
 
@@ -297,6 +487,10 @@ def rank_clusters(df_feat: pd.DataFrame, labels: np.ndarray, nicho: str = "Outro
     """Ranking por potencial com pesos dinâmicos por nicho."""
     tmp = df_feat.copy()
     tmp["cluster"] = labels
+    # Exclui pontos de ruído do DBSCAN (label == -1)
+    tmp = tmp[tmp["cluster"] != -1]
+    if tmp.empty:
+        return pd.DataFrame(columns=["cluster","classe_med","poi_med","score_potencial","ordem"])
     poi_norm_cols = [c for c in tmp.columns if c.startswith("poi_") and c.endswith("_norm")]
     
     # Agrega classe média
@@ -315,12 +509,36 @@ def rank_clusters(df_feat: pd.DataFrame, labels: np.ndarray, nicho: str = "Outro
     agg["ordem"] = np.arange(1, len(agg)+1)
     return agg[["cluster","classe_med","poi_med","score_potencial","ordem"]]
 
+
+# Armazena métricas da última execução para acesso pela API
+_last_clustering_metrics: Dict = {}
+
+
+def gerar_regioes_ideais_com_metricas(produto: str, filtros: dict, nicho: str = None) -> Tuple[list, Dict]:
+    """
+    Versão estendida de gerar_regioes_ideais() que também retorna
+    as métricas de clustering (Silhouette, Davies-Bouldin, Elbow, comparação).
+
+    Returns:
+        (regioes, metricas)
+    """
+    regioes = gerar_regioes_ideais(produto, filtros, nicho)
+    metricas = dict(_last_clustering_metrics)
+    return regioes, metricas
+
+
 def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list:
     """
     Gera regiões ideais para venda com base no produto e filtros.
     Retorna lista de dicts: [{lat, lon, nome, motivo, cluster, score, classe_med, poi_med}]
+
+    Para acessar as métricas de clustering junto com o resultado,
+    use gerar_regioes_ideais_com_metricas() em vez desta função.
     """
     try:
+        # Inicializa métricas (populado mais adiante após clustering)
+        _metricas_finais: Dict = {}
+
         from nlp import identificar_nicho
         if nicho is None:
             nicho = identificar_nicho(produto)
@@ -452,31 +670,46 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
         ], remainder="drop")
         # OTIMIZADO: fit_transform e clustering com parâmetros mais rápidos
         X = ct.fit_transform(df_feat[num_cols + cat_cols])
-        # Reduz número de clusters para acelerar (menos é mais rápido)
-        n_clusters = min(4, max(2, len(df_feat) // 30))
-        if len(df_feat) < n_clusters:
-            print(f"⚠️  Poucos dados ({len(df_feat)}), retornando todos os pontos")
-            regioes = []
-            for _, row in df_feat.head(10).iterrows():
-                regioes.append({
-                    "lat": float(row["lat"]),
-                    "lon": float(row["lon"]),
-                    "nome": row.get("bairro", "Desconhecido"),
-                    "motivo": "Poucos dados após filtro. Mostrando pontos brutos.",
-                    "cluster": None,
-                    "score": None,
-                    "classe_med": None,
-                    "poi_med": None
-                })
-            return regioes
-        km = fit_kmeans(X, n_clusters=n_clusters)
-        labels = km.labels_
+
+        # Elbow Method — calcula ANTES de escolher k para usar o knee point
+        n_clusters_max = min(4, max(2, len(df_feat) // 30))
+        elbow_data = calcular_elbow(X, k_range=range(2, n_clusters_max + 2))
+
+        # Usa a máxima curvatura (knee) como k ótimo, limitado ao máximo calculado
+        n_clusters = min(_knee_point(elbow_data), n_clusters_max)
+        print(f"  ✓ Elbow knee point: k={n_clusters} (base max={n_clusters_max})")
+
+        # Comparação KMeans vs DBSCAN — escolhe o melhor automaticamente
+        comparacao = comparar_kmeans_dbscan(X, n_clusters=n_clusters)
+        labels = comparacao["labels_escolhidos"]
+
+        # Métricas do algoritmo vencedor
+        _metricas_finais = {
+            "algoritmo": comparacao["melhor_algoritmo"],
+            "justificativa": comparacao["justificativa"],
+            "silhouette": comparacao["kmeans" if comparacao["melhor_algoritmo"] == "KMeans" else "dbscan"].get("silhouette"),
+            "davies_bouldin": comparacao["kmeans" if comparacao["melhor_algoritmo"] == "KMeans" else "dbscan"].get("davies_bouldin"),
+            "kmeans": comparacao["kmeans"],
+            "dbscan": comparacao["dbscan"],
+            "elbow": elbow_data,
+        }
+
+        # Se DBSCAN foi escolhido, pode ter mais ou menos clusters
+        n_clusters_final = len(set(labels)) - (1 if -1 in labels else 0)
+
         ranking = rank_clusters(df_feat, labels, nicho)
         print(f"\n📊 Ranking de clusters (top 3):")
         print(ranking.head(3).to_string(index=False))
         top_clusters = ranking["cluster"].tolist()
+        n_total_clusters = len(top_clusters)
         regioes = []
         pontos_por_cluster = 10
+
+        # Verifica se existem dados de POI reais
+        poi_norm_check = [c for c in df_feat.columns if c.startswith("poi_") and c.endswith("_norm")]
+        tem_poi_real = any(float(df_feat[c].sum()) > 0 for c in poi_norm_check) if poi_norm_check else False
+        peso_poi, peso_classe = get_pesos_score_por_nicho(nicho)
+
         for cluster_id in top_clusters:
             subset = df_feat[labels == cluster_id]
             cluster_info = ranking[ranking["cluster"] == cluster_id].iloc[0]
@@ -525,20 +758,41 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
                     motivo_parts.append("📍 POIs: Dados não disponíveis (API não consultada)")
                 
                 motivo = " | ".join(motivo_parts)
-                
+
+                # --------------------------------------------------------
+                # Score por linha: usa classe e POI REAIS do registro,
+                # não a média do cluster. Normalizado para [0, 100].
+                # --------------------------------------------------------
+                row_classe = float(row.get("classe_ord", 3))
+                poi_norm_row_cols = [c for c in row.index if c.startswith("poi_") and c.endswith("_norm")]
+                row_poi = float(np.mean([row[c] for c in poi_norm_row_cols])) if poi_norm_row_cols else 0.0
+
+                if tem_poi_real and row_poi > 0.001:
+                    row_score_raw = peso_poi * row_poi + peso_classe * (row_classe / 5.0)
+                else:
+                    # Sem POIs: classe (70%) + rank do cluster (30%)
+                    rank_bonus = (n_total_clusters - int(cluster_info["ordem"]) + 1) / n_total_clusters
+                    row_score_raw = 0.70 * (row_classe / 5.0) + 0.30 * rank_bonus
+
+                row_score_100 = round(min(max(row_score_raw * 100, 0.0), 100.0), 1)
+
                 regioes.append({
                     "lat": float(row["lat"]),
                     "lon": float(row["lon"]),
                     "nome": f"{row.get('bairro', 'Desconhecido')} - {row.get('nome', 'Cliente')} (Cluster {cluster_id+1})",
                     "motivo": motivo,
                     "cluster": int(cluster_id),
-                    "score": float(cluster_info['score_potencial']),
-                    "classe_med": float(cluster_info['classe_med']),
-                    "poi_med": float(cluster_info['poi_med']),
-                    "tipo_comercial": row.get('tipo_comercial', 'N/A'),
-                    "classe_social": row.get('classe', 'N/A')
+                    "score": row_score_100,
+                    "classe_med": float(cluster_info["classe_med"]),
+                    "poi_med": float(cluster_info["poi_med"]),
+                    "tipo_comercial": row.get("tipo_comercial", "N/A"),
+                    "classe_social": row.get("classe", "N/A"),
                 })
         print(f"\n✓ {len(regioes)} regiões ideais identificadas")
+
+        # Armazena métricas para acesso pela API via gerar_regioes_ideais_com_metricas()
+        _last_clustering_metrics.update(_metricas_finais)
+
         return regioes
     except Exception as e:
         print(f"❌ Erro em gerar_regioes_ideais: {str(e)}")

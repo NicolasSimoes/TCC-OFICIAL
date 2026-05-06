@@ -104,7 +104,7 @@ function identifyNiche(query: string): string {
   return commercialTypes[Math.floor(Math.random() * commercialTypes.length)];
 }
 
-function generateRegions(product: string, niche: string): Region[] {
+function generateRegions(_product: string, niche: string): Region[] {
   const regions: Region[] = [];
   const usedNeighborhoods = new Set<number>();
   const numRegions = 40 + Math.floor(Math.random() * 10);
@@ -169,7 +169,7 @@ function generateInsights(product: string, niche: string, regions: Region[]): st
   ];
 }
 
-function generateActionPlan(product: string, niche: string): ActionItem[] {
+function generateActionPlan(_product: string, niche: string): ActionItem[] {
   return [
     { id: '1', text: `Visitar as 3 regiões com maior score para análise presencial`, checked: false },
     { id: '2', text: `Realizar pesquisa de mercado com potenciais clientes da região`, checked: false },

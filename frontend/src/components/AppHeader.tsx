@@ -1,39 +1,25 @@
-import { MapPin, Globe, Settings } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { MapPin } from 'lucide-react';
 
-export function AppHeader() {
+interface AppHeaderProps {
+  apiOnline?: boolean | null;
+}
+
+export function AppHeader({ apiOnline }: AppHeaderProps) {
   return (
-    <header className="sticky top-0 z-50 h-[60px] border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-      <div className="flex h-full items-center justify-between px-4 md:px-6">
-        {/* Logo */}
+    <header className="sticky top-0 z-50 bg-white/90 backdrop-blur border-b border-border">
+      <div className="mx-auto max-w-3xl px-4 h-14 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="flex items-center justify-center rounded-lg bg-primary/10 p-2">
-            <MapPin className="h-5 w-5 text-primary" />
-          </div>
-          <div className="flex flex-col">
-            <span className="text-lg font-bold tracking-tight">Smart Sale</span>
-            <span className="text-xs font-semibold text-primary">FORTALEZA</span>
-          </div>
+          <MapPin className="h-5 w-5 text-primary" />
+          <span className="font-semibold text-foreground tracking-tight">Smart Sale</span>
+          <span className="text-xs font-medium text-muted-foreground">Fortaleza</span>
         </div>
 
-        {/* Actions */}
-        <div className="flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Alterar idioma"
-            className="hidden sm:flex"
-          >
-            <Globe className="h-5 w-5" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label="Configurações"
-          >
-            <Settings className="h-5 w-5" />
-          </Button>
-        </div>
+        {apiOnline !== null && apiOnline !== undefined && (
+          <span className={`flex items-center gap-1.5 text-xs ${apiOnline ? 'text-emerald-600' : 'text-amber-500'}`}>
+            <span className={`inline-block h-1.5 w-1.5 rounded-full ${apiOnline ? 'bg-emerald-500' : 'bg-amber-400'}`} />
+            {apiOnline ? 'API online' : 'Demo mode'}
+          </span>
+        )}
       </div>
     </header>
   );

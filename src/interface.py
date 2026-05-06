@@ -16,10 +16,15 @@ def analisar_produto_cached(produto: str):
     """Versão cacheada da análise de produto."""
     return analisar_produto_completo(produto)
 
-@st.cache_data(ttl=3600, show_spinner=False) 
-def processar_requisicao_cached(produto: str, filtros_hash: str, filtros: dict):
-    """Versão cacheada do processamento de requisição."""
-    return processar_requisicao(produto, filtros)
+@st.cache_data(ttl=3600, show_spinner=False)
+def processar_requisicao_cached(produto: str, filtros_hash: str, _filtros: dict):
+    """Versão cacheada do processamento de requisição.
+
+    O parâmetro `_filtros` começa com underscore para que o Streamlit não
+    tente fazer hash de um dict mutável (quebraria o cache). A chave de
+    cache real é `filtros_hash`.
+    """
+    return processar_requisicao(produto, _filtros)
 
 st.set_page_config(
     page_title="Smart Sale Fortaleza",
@@ -210,27 +215,11 @@ with col2:
     with col_button:
         enviar = st.button("Send", key="enviar_button")
 
-    # Estilização
+    # Estilização adicional do input (foco)
     st.markdown("""
     <style>
-
         div[data-baseweb="input"] > div:focus-within {
             border: 1px solid #22c55e !important;
-        }
-
-        .stButton>button {
-            background-color: #22c55e !important;
-            color: white !important;
-            border: none !important;
-            border-radius: 10px !important;
-            padding: 0.7rem 0.9rem !important;
-            font-weight: 600 !important;
-            font-size: 1.1rem !important;
-            transition: 0.2s;
-        }
-        .stButton>button:hover {
-            background-color: #16a34a !important;
-            transform: scale(1.05);
         }
     </style>
     """, unsafe_allow_html=True)
@@ -259,10 +248,10 @@ if enviar:
         # Processa regiões ideais (com cache)
         if usar_api:
             with st.spinner("📍 Identificando melhores regiões... (Enriquecendo ~10 locais com Google Places API - ~20 segundos)"):
-                nicho, mapa, regioes = processar_requisicao_cached(produto, filtros_hash, filtros)
+                nicho, mapa, regioes = processar_requisicao_cached(produto, filtros_hash, _filtros=filtros)
         else:
             with st.spinner("📍 Identificando melhores regiões..."):
-                nicho, mapa, regioes = processar_requisicao_cached(produto, filtros_hash, filtros)
+                nicho, mapa, regioes = processar_requisicao_cached(produto, filtros_hash, _filtros=filtros)
         
         # NÃO gera estratégia automaticamente (será gerada sob demanda na aba)
         # Salva resultados no session_state SEM estratégia ainda
