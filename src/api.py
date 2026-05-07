@@ -28,8 +28,9 @@ _SRC = Path(__file__).resolve().parent
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from nlp import analisar_produto_completo, gerar_estrategia_comercial, identificar_nicho_com_confianca  # noqa: E402
+from nlp import analisar_produto_completo, gerar_estrategia_comercial, identificar_nicho_com_confianca, extrair_produto_do_contexto  # noqa: E402
 from clustering_pipeline import gerar_regioes_ideais_com_metricas  # noqa: E402
+from config import SAZONALIDADE_BY_NICHE, ROI_PARAMS  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +61,10 @@ class Region(BaseModel):
     poi_med: Optional[float] = None
     tipo_comercial: Optional[str] = None
     classe_social: Optional[str] = None
+    analise_mercado: Optional[dict] = Field(
+        default=None,
+        description="Análise de mercado via Google Places (concorrentes, sinergias, âncoras)",
+    )
 
 
 class Analysis(BaseModel):
@@ -90,6 +95,29 @@ class AnalyzeResponse(BaseModel):
     regioes: List[Region]
     total_regioes: int
     metricas_clustering: Optional[ClusteringMetrics] = None
+    sazonalidade: Optional[List[int]] = Field(
+        default=None,
+        description="Índices sazonais mensais 0-100 (Jan-Dez) para o nicho",
+    )
+
+
+class ROIRequest(BaseModel):
+    nicho: str
+    investimento: str = Field(default="medio", description="baixo | medio | alto")
+    avg_score: float = Field(default=70.0, ge=0, le=100)
+
+
+class ROIResponse(BaseModel):
+    custo_setup_min: int
+    custo_setup_max: int
+    faturamento_m1: int
+    faturamento_m6: int
+    faturamento_m12: int
+    payback_meses: int
+    lucro_liquido_m12: int
+    margem: float
+    label_investimento: str
+    premissas: List[str]
 
 
 class StrategyRequest(BaseModel):
@@ -98,10 +126,31 @@ class StrategyRequest(BaseModel):
     regioes: List[Region] = Field(default_factory=list)
     pesos_classe: dict = Field(default_factory=dict)
     filtros: Optional[Filters] = None
+    contexto_negocio: Optional[dict] = Field(default=None, description="Contexto do negócio (descrição, objetivo, investimento)")
 
 
 class StrategyResponse(BaseModel):
     estrategia: str
+
+
+class BusinessContext(BaseModel):
+    """Contexto livre informado pelo usuário no modo guiado (chat)."""
+    descricao_negocio: str = Field(..., min_length=10, max_length=2000)
+    objetivo: Optional[str] = Field(default=None, description="expandir | testar | primeiro_ponto")
+    investimento: Optional[str] = Field(default=None, description="baixo | medio | alto")
+
+
+class ContextAnalyzeRequest(BaseModel):
+    contexto: BusinessContext
+    filtros: Filters = Field(default_factory=Filters)
+
+
+class ContextAnalyzeResponse(AnalyzeResponse):
+    """Resposta do modo guiado: igual ao /analyze + produto extraído + estratégia."""
+    produto_extraido: str
+    publico_alvo_inferido: Optional[str] = None
+    palavras_chave: Optional[str] = None
+    estrategia: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -202,11 +251,45 @@ def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
             regioes=[Region(**r) for r in regioes],
             total_regioes=len(regioes),
             metricas_clustering=metricas,
+            sazonalidade=SAZONALIDADE_BY_NICHE.get(analise["nicho"], SAZONALIDADE_BY_NICHE["Outro"]),
         )
     except HTTPException:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Erro no pipeline: {exc}") from exc
+
+
+@app.post("/roi/estimate", response_model=ROIResponse, tags=["analysis"])
+def roi_estimate(payload: ROIRequest) -> ROIResponse:
+    """Estima ROI simplificado com base no nível de investimento e score médio."""
+    params = ROI_PARAMS.get(payload.investimento, ROI_PARAMS["medio"])
+    score_mult = 0.5 + 0.5 * max(0.0, min(1.0, payload.avg_score / 100.0))
+    fat_base = params["faturamento_mensal_base"]
+    margem = params["margem"]
+
+    fat_m1 = int(fat_base * score_mult * 0.6)   # mês 1 é ramp-up
+    fat_m6 = int(fat_base * score_mult * 0.85 * 6)
+    fat_m12 = int(fat_base * score_mult * 12)
+    lucro_m12 = int(fat_m12 * margem - params["custo_setup_min"])
+
+    return ROIResponse(
+        custo_setup_min=params["custo_setup_min"],
+        custo_setup_max=params["custo_setup_max"],
+        faturamento_m1=fat_m1,
+        faturamento_m6=fat_m6,
+        faturamento_m12=fat_m12,
+        payback_meses=params["payback_meses"],
+        lucro_liquido_m12=max(0, lucro_m12),
+        margem=margem,
+        label_investimento=params["label"],
+        premissas=[
+            f"Investimento: {params['label']}",
+            f"Faturamento base mensal do nicho estimado em R${fat_base:,.0f}",
+            f"Fator de localização (score {payload.avg_score:.0f}/100): {score_mult:.2f}x",
+            f"Margem líquida estimada: {margem*100:.0f}%",
+            "Valores são estimativas para planejamento — valide com pesquisa de campo.",
+        ],
+    )
 
 
 @app.post("/strategy", response_model=StrategyResponse, tags=["analysis"])
@@ -221,7 +304,85 @@ def strategy(payload: StrategyRequest) -> StrategyResponse:
             regioes=regioes,
             pesos_classe=payload.pesos_classe,
             filtros=filtros,
+            contexto_negocio=payload.contexto_negocio,
         )
         return StrategyResponse(estrategia=texto)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/analyze/context", response_model=ContextAnalyzeResponse, tags=["analysis"])
+def analyze_context(payload: ContextAnalyzeRequest) -> ContextAnalyzeResponse:
+    """
+    Modo guiado: recebe descrição livre do negócio + objetivo + investimento.
+    Extrai o produto via OpenAI, executa o pipeline completo (NLP + clustering)
+    e gera estratégia comercial enriquecida com o contexto.
+    """
+    desc = (payload.contexto.descricao_negocio or "").strip()
+    if len(desc) < 10:
+        raise HTTPException(status_code=400, detail="Descrição do negócio muito curta (mínimo 10 caracteres)")
+
+    try:
+        # 1. Extrai produto/público/keywords do contexto
+        extraido = extrair_produto_do_contexto(desc)
+        produto = extraido.get("produto") or desc[:60]
+
+        # 2. Pipeline NLP + clustering padrão
+        analise = analisar_produto_completo(produto)
+        nlp_info = identificar_nicho_com_confianca(produto)
+        filtros_dict = payload.filtros.model_dump()
+        regioes, metricas_raw = gerar_regioes_ideais_com_metricas(
+            produto, filtros_dict, analise["nicho"]
+        )
+
+        metricas: Optional[ClusteringMetrics] = None
+        if metricas_raw:
+            km_info = metricas_raw.get("kmeans", {})
+            db_info = metricas_raw.get("dbscan", {})
+            metricas = ClusteringMetrics(
+                algoritmo=metricas_raw.get("algoritmo"),
+                justificativa=metricas_raw.get("justificativa"),
+                silhouette=metricas_raw.get("silhouette"),
+                davies_bouldin=metricas_raw.get("davies_bouldin"),
+                n_clusters=km_info.get("n_clusters"),
+                elbow=metricas_raw.get("elbow"),
+                kmeans_silhouette=km_info.get("silhouette"),
+                dbscan_silhouette=db_info.get("silhouette"),
+            )
+
+        # 3. Estratégia enriquecida com contexto
+        contexto_dict = {
+            "descricao_negocio": desc,
+            "objetivo": payload.contexto.objetivo,
+            "investimento": payload.contexto.investimento,
+            "publico_alvo": extraido.get("publico_alvo", ""),
+        }
+        estrategia_texto = gerar_estrategia_comercial(
+            produto=produto,
+            nicho=analise["nicho"],
+            regioes=regioes,
+            pesos_classe=analise["pesos_classe"],
+            filtros=filtros_dict,
+            contexto_negocio=contexto_dict,
+        )
+
+        return ContextAnalyzeResponse(
+            produto=produto,
+            produto_extraido=produto,
+            publico_alvo_inferido=extraido.get("publico_alvo") or None,
+            palavras_chave=extraido.get("palavras_chave") or None,
+            analise=Analysis(
+                **analise,
+                nlp_confianca=nlp_info.get("confianca"),
+                nlp_metodo=nlp_info.get("metodo"),
+            ),
+            regioes=[Region(**r) for r in regioes],
+            total_regioes=len(regioes),
+            metricas_clustering=metricas,
+            estrategia=estrategia_texto,
+            sazonalidade=SAZONALIDADE_BY_NICHE.get(analise["nicho"], SAZONALIDADE_BY_NICHE["Outro"]),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Erro no pipeline contextual: {exc}") from exc

@@ -149,6 +149,23 @@ def nearby_count(lat: float, lon: float, place_type: str, radius: int, session: 
     
     return total
 
+def nearby_names(lat: float, lon: float, place_type: str, radius: int, session: requests.Session, max_results: int = 5) -> list:
+    """Retorna nomes de estabelecimentos próximos via Google Places Nearby Search."""
+    if not API_KEY:
+        return []
+    base = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+    params = {"location": f"{lat},{lon}", "radius": radius, "type": place_type, "key": API_KEY}
+    try:
+        r = session.get(base, params=params, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        if data.get("status") not in ["OK", "ZERO_RESULTS"]:
+            return []
+        return [p["name"] for p in data.get("results", [])[:max_results] if "name" in p]
+    except Exception:
+        return []
+
+
 def enrich_row_with_pois(row: pd.Series, cache_df: pd.DataFrame, session: requests.Session, nicho: str = "Outro") -> Tuple[Dict[str,int], List[dict]]:
     """Enriquece uma linha com POIs específicos do nicho, usando cache quando disponível."""
     try:
@@ -789,6 +806,27 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
                     "classe_social": row.get("classe", "N/A"),
                 })
         print(f"\n✓ {len(regioes)} regiões ideais identificadas")
+
+        # Análise de mercado nas top-N regiões (apenas se API ativa)
+        if usar_api and API_KEY and regioes:
+            try:
+                from market_analysis import analyze_top_regions
+                cache_market = load_cache()
+                sess_market = create_session_with_retry()
+                regioes = analyze_top_regions(
+                    regioes,
+                    nicho=nicho,
+                    cache_df=cache_market,
+                    session=sess_market,
+                    nearby_count_fn=nearby_count,
+                    hkey_fn=hkey,
+                    save_cache_fn=save_cache,
+                    nearby_names_fn=nearby_names,
+                )
+                analisadas = sum(1 for r in regioes if r.get("analise_mercado"))
+                print(f"📊 Análise de mercado aplicada em {analisadas} regiões top")
+            except Exception as exc:
+                print(f"⚠️ Falha na análise de mercado: {exc}")
 
         # Armazena métricas para acesso pela API via gerar_regioes_ideais_com_metricas()
         _last_clustering_metrics.update(_metricas_finais)

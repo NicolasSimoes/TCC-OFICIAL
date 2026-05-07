@@ -104,3 +104,52 @@
 .focus-visible-ring:focus-visible {
   @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-background;
 }
+
+/* ===== PRINT / PDF STYLES ===== */
+@media print {
+  /* Ocultar elementos interativos e navegação */
+  .no-print,
+  header nav,
+  button,
+  [role="button"],
+  .leaflet-control-zoom,
+  .leaflet-control-attribution {
+    display: none !important;
+  }
+
+  body {
+    background: #fff !important;
+    color: #000 !important;
+    font-size: 11px;
+  }
+
+  .print-page-break {
+    page-break-before: always;
+  }
+
+  /* Cards e containers ficam visíveis com borda simples */
+  [class*="rounded"],
+  .border {
+    border-color: #ccc !important;
+    box-shadow: none !important;
+  }
+
+  /* Mapa: força altura fixa */
+  #map-section .leaflet-container {
+    height: 280px !important;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  /* Garante que cores de gradiente apareçam */
+  * {
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  /* Remove animações */
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -15,6 +15,7 @@ import {
   Strategy,
   Demographics,
   ClusteringMetrics,
+  ROIEstimate,
 } from '@/types';
 
 const API_BASE_URL =
@@ -35,6 +36,16 @@ interface BackendRegion {
   poi_med?: number | null;
   tipo_comercial?: string | null;
   classe_social?: string | null;
+  analise_mercado?: {
+    competitors: number;
+    synergies: number;
+    anchors: number;
+    density: number;
+    saturacao: 'vazio' | 'baixa' | 'media' | 'alta';
+    raio_m: number;
+    insight: string;
+    competitor_names?: string[];
+  } | null;
 }
 
 interface BackendAnalysis {
@@ -63,6 +74,7 @@ interface BackendAnalyzeResponse {
   regioes: BackendRegion[];
   total_regioes: number;
   metricas_clustering?: BackendClusteringMetrics | null;
+  sazonalidade?: number[] | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +116,19 @@ function mapRegion(r: BackendRegion, idx: number): Region {
     commercialType: r.tipo_comercial || 'Outros',
     pois: Math.round((r.poi_med ?? 0) * 100),
     population: 0,
-    competitors: 0,
+    competitors: r.analise_mercado?.competitors ?? 0,
+    marketAnalysis: r.analise_mercado
+      ? {
+          competitors: r.analise_mercado.competitors,
+          synergies: r.analise_mercado.synergies,
+          anchors: r.analise_mercado.anchors,
+          density: r.analise_mercado.density,
+          saturacao: r.analise_mercado.saturacao,
+          raio_m: r.analise_mercado.raio_m,
+          insight: r.analise_mercado.insight,
+          competitor_names: r.analise_mercado.competitor_names ?? [],
+        }
+      : undefined,
   };
 }
 
@@ -281,6 +305,7 @@ export async function analyzeProduct(
     metricas_clustering,
     nlp_confianca: data.analise.nlp_confianca ?? undefined,
     nlp_metodo: data.analise.nlp_metodo ?? undefined,
+    sazonalidade: data.sazonalidade ?? undefined,
   };
 }
 
@@ -293,4 +318,129 @@ export async function pingApi(signal?: AbortSignal): Promise<boolean> {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Modo guiado (chat por contexto)
+// ---------------------------------------------------------------------------
+
+export interface BusinessContextPayload {
+  descricao: string;
+  objetivo: 'expandir' | 'testar' | 'primeiro_ponto';
+  investimento: 'baixo' | 'medio' | 'alto';
+}
+
+interface BackendContextResponse extends BackendAnalyzeResponse {
+  produto_extraido: string;
+  publico_alvo_inferido?: string | null;
+  palavras_chave?: string | null;
+  estrategia?: string | null;
+}
+
+export async function analyzeByContext(
+  ctx: BusinessContextPayload,
+  options: { filters?: Filters; signal?: AbortSignal; usarApi?: boolean } = {},
+): Promise<AnalysisResult> {
+  const filtros = {
+    classe: options.filters?.socialClasses ?? [],
+    tipo:
+      options.filters?.commercialTypes?.length === 1
+        ? options.filters.commercialTypes[0]
+        : null,
+    bairro: options.filters?.neighborhoods ?? [],
+    usar_api: options.usarApi ?? false,
+  };
+
+  const data = await postJson<BackendContextResponse>(
+    '/analyze/context',
+    {
+      contexto: {
+        descricao_negocio: ctx.descricao,
+        objetivo: ctx.objetivo,
+        investimento: ctx.investimento,
+      },
+      filtros,
+    },
+    options.signal,
+  );
+
+  const regions = data.regioes.map(mapRegion);
+  const product = data.produto_extraido || data.produto;
+  const niche = data.analise.nicho;
+
+  const top = regions[0];
+  const typeCount: Record<string, number> = {};
+  regions.forEach(r => (typeCount[r.commercialType] = (typeCount[r.commercialType] || 0) + 1));
+  const topType =
+    Object.entries(typeCount).sort((a, b) => b[1] - a[1])[0]?.[0] || 'N/A';
+
+  const metricas_clustering: ClusteringMetrics | undefined = data.metricas_clustering
+    ? {
+        algoritmo: data.metricas_clustering.algoritmo ?? undefined,
+        justificativa: data.metricas_clustering.justificativa ?? undefined,
+        silhouette: data.metricas_clustering.silhouette ?? undefined,
+        davies_bouldin: data.metricas_clustering.davies_bouldin ?? undefined,
+        n_clusters: data.metricas_clustering.n_clusters ?? undefined,
+        elbow: data.metricas_clustering.elbow ?? undefined,
+        kmeans_silhouette: data.metricas_clustering.kmeans_silhouette ?? undefined,
+        dbscan_silhouette: data.metricas_clustering.dbscan_silhouette ?? undefined,
+      }
+    : undefined;
+
+  return {
+    product,
+    niche,
+    totalRegions: regions.length,
+    avgScore:
+      regions.length === 0
+        ? 0
+        : Math.round((regions.reduce((s, r) => s + r.score, 0) / regions.length) * 10) / 10,
+    topNeighborhood: top ? top.name.split(' - ')[0] : '—',
+    topCommercialType: topType,
+    regions,
+    insights: buildInsights(product, niche, regions),
+    actionPlan: defaultActionPlan(product, niche),
+    strategy: buildStrategyFromText(product, niche, regions, data.estrategia || ''),
+    demographics: buildDemographics(regions),
+    metricas_clustering,
+    nlp_confianca: data.analise.nlp_confianca ?? undefined,
+    nlp_metodo: data.analise.nlp_metodo ?? undefined,
+    sazonalidade: (data as any).sazonalidade ?? undefined,
+    investimento: ctx.investimento,
+  };
+}
+
 export const API_BASE = API_BASE_URL;
+
+// ---------------------------------------------------------------------------
+// ROI estimado
+// ---------------------------------------------------------------------------
+export async function estimateROI(
+  nicho: string,
+  investimento: string,
+  avgScore: number,
+  signal?: AbortSignal,
+): Promise<ROIEstimate> {
+  const data = await postJson<{
+    custo_setup_min: number;
+    custo_setup_max: number;
+    faturamento_m1: number;
+    faturamento_m6: number;
+    faturamento_m12: number;
+    payback_meses: number;
+    lucro_liquido_m12: number;
+    margem: number;
+    label_investimento: string;
+    premissas: string[];
+  }>('/roi/estimate', { nicho, investimento, avg_score: avgScore }, signal);
+  return {
+    custoSetupMin: data.custo_setup_min,
+    custoSetupMax: data.custo_setup_max,
+    faturamentoM1: data.faturamento_m1,
+    faturamentoM6: data.faturamento_m6,
+    faturamentoM12: data.faturamento_m12,
+    paybackMeses: data.payback_meses,
+    lucroLiquidoM12: data.lucro_liquido_m12,
+    margem: data.margem,
+    labelInvestimento: data.label_investimento,
+    premissas: data.premissas,
+  };
+}

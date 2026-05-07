@@ -378,12 +378,73 @@ def sugerir_pesos_classe(nicho: str) -> Dict[str, int]:
     return pesos_map.get(nicho, pesos_map["Outro"])
 
 
+def extrair_produto_do_contexto(descricao: str) -> Dict[str, str]:
+    """
+    A partir de uma descrição livre do negócio do usuário, extrai:
+      - produto: termo curto e específico para alimentar o pipeline NLP
+      - publico_alvo: descrição inferida do público
+      - palavras_chave: termos relevantes do contexto
+
+    Usa OpenAI quando disponível; caso contrário, faz uma extração heurística
+    simples (primeiras palavras significativas da descrição).
+    """
+    descricao = (descricao or "").strip()
+    if not descricao:
+        return {"produto": "", "publico_alvo": "", "palavras_chave": ""}
+
+    if is_openai_available():
+        try:
+            client = OpenAI(api_key=get_openai_key())
+            prompt = (
+                "Extraia da descrição de negócio abaixo um JSON com 3 campos:\n"
+                "- produto: termo curto (1-4 palavras) representando o PRODUTO/SERVIÇO principal\n"
+                "- publico_alvo: descrição curta do público-alvo inferido\n"
+                "- palavras_chave: 3-6 termos separados por vírgula\n\n"
+                f"DESCRIÇÃO:\n{descricao}\n\n"
+                "Responda APENAS com JSON válido, sem markdown."
+            )
+            resp = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "Você é um analista de negócios. Responde apenas em JSON."},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.2,
+                max_tokens=300,
+            )
+            import json as _json
+            raw = resp.choices[0].message.content.strip()
+            # Remove cercas markdown caso o modelo as inclua
+            if raw.startswith("```"):
+                raw = raw.strip("`")
+                if raw.lower().startswith("json"):
+                    raw = raw[4:].strip()
+            data = _json.loads(raw)
+            return {
+                "produto": str(data.get("produto", "")).strip(),
+                "publico_alvo": str(data.get("publico_alvo", "")).strip(),
+                "palavras_chave": str(data.get("palavras_chave", "")).strip(),
+            }
+        except Exception as exc:
+            print(f"⚠️ Falha ao extrair contexto via OpenAI: {exc}")
+
+    # Fallback heurístico: pega substantivos óbvios
+    palavras = [p for p in descricao.split() if len(p) > 3]
+    produto = " ".join(palavras[:3]) if palavras else descricao[:40]
+    return {
+        "produto": produto,
+        "publico_alvo": "",
+        "palavras_chave": ", ".join(palavras[:5]),
+    }
+
+
 def gerar_estrategia_comercial(
     produto: str, 
     nicho: str, 
     regioes: List[tuple],
     pesos_classe: Dict[str, int],
-    filtros: Dict = None
+    filtros: Dict = None,
+    contexto_negocio: Dict = None,
 ) -> str:
     """
     Gera estratégia comercial personalizada usando OpenAI GPT-4.
@@ -426,6 +487,34 @@ def gerar_estrategia_comercial(
             if filtros.get("bairro"):
                 filtros_texto += f"\n- Bairros: {', '.join(filtros['bairro'])}"
 
+        contexto_texto = ""
+        if contexto_negocio:
+            desc = contexto_negocio.get("descricao_negocio") or contexto_negocio.get("descricao") or ""
+            obj = contexto_negocio.get("objetivo")
+            inv = contexto_negocio.get("investimento")
+            publico = contexto_negocio.get("publico_alvo")
+            mapa_obj = {
+                "expandir": "Expandir negócio existente (abrir filial)",
+                "testar": "Testar mercado antes de investir",
+                "primeiro_ponto": "Abrir o primeiro ponto comercial",
+            }
+            mapa_inv = {
+                "baixo": "Baixo (até R$ 30k)",
+                "medio": "Médio (R$ 30k–150k)",
+                "alto": "Alto (acima de R$ 150k)",
+            }
+            partes = []
+            if desc:
+                partes.append(f"- Descrição do negócio: {desc}")
+            if publico:
+                partes.append(f"- Público-alvo declarado: {publico}")
+            if obj:
+                partes.append(f"- Objetivo principal: {mapa_obj.get(obj, obj)}")
+            if inv:
+                partes.append(f"- Faixa de investimento: {mapa_inv.get(inv, inv)}")
+            if partes:
+                contexto_texto = "\n\nCONTEXTO DO NEGÓCIO (informado pelo usuário):\n" + "\n".join(partes)
+
         prompt = f"""Você é um consultor especialista em geomarketing e estratégia comercial para Fortaleza/CE.
 
 Analise os dados abaixo e crie uma estratégia comercial DETALHADA e ACIONÁVEL:
@@ -435,7 +524,7 @@ NICHO: {nicho}
 CLASSE FOCAL: {classe_focal} (maior potencial)
 TOP 5 REGIÕES: {', '.join(top_regioes) if top_regioes else 'Nenhuma região identificada'}
 
-FILTROS APLICADOS:{filtros_texto if filtros_texto else ' Nenhum'}
+FILTROS APLICADOS:{filtros_texto if filtros_texto else ' Nenhum'}{contexto_texto}
 
 PESOS POR CLASSE:
 {chr(10).join([f'- Classe {k}: {v:,}' for k, v in sorted(pesos_classe.items())])}
@@ -449,7 +538,7 @@ Forneça:
 6. **Ações Táticas**: 3-5 ações imediatas para começar
 7. **Riscos e Mitigação**: Principais desafios e como superá-los
 
-Seja específico para Fortaleza, use dados locais quando relevante, e dê exemplos práticos."""
+Seja específico para Fortaleza, use dados locais quando relevante, e dê exemplos práticos. Quando houver CONTEXTO DO NEGÓCIO informado, ADAPTE a estratégia ao objetivo e à faixa de investimento (ex: investimento baixo → priorize parcerias, marketplaces e quiosques; alto → considere ponto próprio em região premium)."""
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",  # Mais econômico que gpt-4

@@ -1,3 +1,27 @@
+export interface MarketAnalysis {
+  competitors: number;
+  synergies: number;
+  anchors: number;
+  density: number;
+  saturacao: 'vazio' | 'baixa' | 'media' | 'alta';
+  raio_m: number;
+  insight: string;
+  competitor_names?: string[];
+}
+
+export interface ROIEstimate {
+  custoSetupMin: number;
+  custoSetupMax: number;
+  faturamentoM1: number;
+  faturamentoM6: number;
+  faturamentoM12: number;
+  paybackMeses: number;
+  lucroLiquidoM12: number;
+  margem: number;
+  labelInvestimento: string;
+  premissas: string[];
+}
+
 export interface Region {
   id: string;
   name: string;
@@ -10,6 +34,7 @@ export interface Region {
   pois: number;
   population: number;
   competitors: number;
+  marketAnalysis?: MarketAnalysis;
 }
 
 export interface ClusteringMetrics {
@@ -39,6 +64,10 @@ export interface AnalysisResult {
   metricas_clustering?: ClusteringMetrics;
   nlp_confianca?: number;
   nlp_metodo?: string;
+  // Sazonalidade (12 meses Jan-Dez, índice 0-100)
+  sazonalidade?: number[];
+  // Nível de investimento informado no chat guiado
+  investimento?: string;
 }
 
 export interface ActionItem {

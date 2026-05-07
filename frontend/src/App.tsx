@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { AppHeader } from '@/components/AppHeader';
-import { SearchBar } from '@/components/SearchBar';
+import { BusinessChat, BusinessContextData } from '@/components/BusinessChat';
 import { MetricsCards } from '@/components/MetricsCards';
 import { MLMetrics } from '@/components/MLMetrics';
 import { AnalysisDetails } from '@/components/AnalysisDetails';
@@ -8,34 +8,48 @@ import { MapView } from '@/components/MapView';
 import { StrategyTabs } from '@/components/StrategyTabs';
 import { MarketInsights } from '@/components/MarketInsights';
 import { ActionPlan } from '@/components/ActionPlan';
+import { MarketAnalysisInsights } from '@/components/MarketAnalysisInsights';
+import { SeasonalityCard } from '@/components/SeasonalityCard';
+import { FlowChart } from '@/components/FlowChart';
+import { ROISimulator } from '@/components/ROISimulator';
+import { CompareModal } from '@/components/CompareModal';
 import { generateMockAnalysis } from '@/lib/mock-data';
-import { analyzeProduct, pingApi } from '@/lib/api';
+import { analyzeByContext, pingApi } from '@/lib/api';
 import { AnalysisResult, Region } from '@/types';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle, AlertCircle } from 'lucide-react';
+import { CheckCircle, AlertCircle, FileDown, GitCompare } from 'lucide-react';
 
 function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [apiOnline, setApiOnline] = useState<boolean | null>(null);
   const [focusRegion, setFocusRegion] = useState<Region | null>(null);
+  const [showCompare, setShowCompare] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     pingApi().then(setApiOnline);
   }, []);
 
-  const handleSearch = async (query: string, usarApi: boolean = false) => {
+  const handleContextSubmit = async (ctx: BusinessContextData) => {
     setIsLoading(true);
     setFocusRegion(null);
     let analysisResult: AnalysisResult;
     try {
-      analysisResult = await analyzeProduct(query, { withStrategy: true, usarApi });
+      analysisResult = await analyzeByContext(
+        {
+          descricao: ctx.descricao,
+          objetivo: ctx.objetivo,
+          investimento: ctx.investimento,
+        },
+        { usarApi: ctx.usarApi },
+      );
       setApiOnline(true);
-    } catch {
+    } catch (e) {
+      console.warn('Falha modo contexto, usando mock:', e);
       setApiOnline(false);
       await new Promise((r) => setTimeout(r, 600));
-      analysisResult = generateMockAnalysis(query);
+      analysisResult = generateMockAnalysis(ctx.descricao.slice(0, 40));
     }
     setResult(analysisResult);
     setIsLoading(false);
@@ -64,10 +78,11 @@ function App() {
             Encontre o ponto ideal<br />
             <span className="text-primary">para o seu produto</span>
           </h1>
-          <p className="text-muted-foreground mb-8 text-sm">
+          <p className="text-muted-foreground mb-6 text-sm">
             Pipeline de geomarketing com NLP, clustering e dados geoespaciais de Fortaleza
           </p>
-          <SearchBar onSearch={handleSearch} isLoading={isLoading} />
+
+          <BusinessChat onSubmit={handleContextSubmit} isLoading={isLoading} />
         </section>
 
         {/* Loading skeleton */}
@@ -133,11 +148,31 @@ function App() {
                 />
               </section>
 
+              <MarketAnalysisInsights regions={result.regions} />
+
               <StrategyTabs
                 regions={result.regions}
                 strategy={result.strategy}
                 demographics={result.demographics}
                 onFocusRegion={handleFocusRegion}
+              />
+
+              {/* Sazonalidade + Fluxo */}
+              {result.sazonalidade && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <SeasonalityCard sazonalidade={result.sazonalidade} niche={result.niche} />
+                  <FlowChart niche={result.niche} />
+                </div>
+              )}
+              {!result.sazonalidade && (
+                <FlowChart niche={result.niche} />
+              )}
+
+              {/* ROI Simulator */}
+              <ROISimulator
+                niche={result.niche}
+                avgScore={result.avgScore}
+                investimento={result.investimento}
               />
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -147,6 +182,31 @@ function App() {
                   storageKey={`smart-sale-${result.product}`}
                 />
               </div>
+
+              {/* Botões de ação */}
+              <div className="flex flex-wrap gap-2 no-print pt-2">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="flex items-center gap-1.5 rounded-lg border px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all"
+                >
+                  <FileDown className="h-3.5 w-3.5" />
+                  Exportar PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCompare(true)}
+                  className="flex items-center gap-1.5 rounded-lg border px-4 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all"
+                >
+                  <GitCompare className="h-3.5 w-3.5" />
+                  Comparar "E se?"
+                </button>
+              </div>
+
+              {/* Compare modal */}
+              {showCompare && (
+                <CompareModal original={result} onClose={() => setShowCompare(false)} />
+              )}
             </motion.div>
           )}
         </AnimatePresence>
@@ -159,8 +219,7 @@ function App() {
                 <AlertCircle className="h-4 w-4" /> Backend offline — usando dados de demonstração
               </p>
             )}
-            <p>Digite o nome de um produto e pressione Analisar</p>
-            <p className="text-xs opacity-60">ex: whey protein · fralda · shampoo · notebook</p>
+            <p className="text-xs opacity-60">Conte sobre seu negócio em 3 etapas — a IA extrai o produto e adapta a estratégia</p>
           </div>
         )}
       </main>
