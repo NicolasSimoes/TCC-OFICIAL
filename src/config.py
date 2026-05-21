@@ -22,9 +22,11 @@ CACHE_DIR.mkdir(exist_ok=True)
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Google Places API
+# Google Places API v1 (POST + FieldMask)
+# Migrado de Legacy GET /maps/api/place/nearbysearch/json em [data]
+# Validado via deep search Gemini (docs/RESPOSTA_GEMINI.md)
 PLACES_API_CONFIG = {
-    "base_url": "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
+    "base_url": "https://places.googleapis.com/v1/places:searchNearby",
     "timeout": 30,
     "max_retries": 3,
     "backoff_factor": 1,
@@ -53,8 +55,8 @@ PLACES_TYPES_BY_NICHE = {
         "stationery": ["stationery_store"],
     },
     "Alimentação": {
-        "supermarket": ["supermarket", "grocery_or_supermarket"],
-        "restaurant": ["restaurant", "cafe", "bakery"],
+        "supermarket": ["supermarket", "grocery_or_supermarket", "convenience_store"],
+        "restaurant": ["restaurant", "cafe", "bakery", "bar", "meal_takeaway"],
     },
     "Farmácia": {
         "pharmacy": ["pharmacy", "drugstore"],
@@ -80,6 +82,7 @@ PLACES_TYPES_BY_NICHE = {
         "health": ["hospital", "doctor", "physiotherapist"],
         "pharmacy": ["pharmacy", "drugstore"],
         "dental": ["dentist"],
+        "lab": ["medical_lab"],
     },
 }
 
@@ -100,12 +103,12 @@ COMPETITOR_TYPES_BY_NICHE = {
     "Fitness":     ["gym"],
     "Infantil":    ["clothing_store", "store"],
     "Escolar":     ["book_store", "stationery_store"],
-    "Alimentação": ["supermarket", "grocery_or_supermarket"],
+    "Alimentação": ["supermarket", "grocery_or_supermarket", "convenience_store"],
     "Farmácia":    ["pharmacy", "drugstore"],
     "Beleza":      ["beauty_salon", "hair_care"],
     "Pet":         ["pet_store"],
     "Eletrônicos": ["electronics_store"],
-    "Saúde":       ["hospital", "doctor"],
+    "Saúde":       ["hospital", "doctor", "medical_lab"],
     "Outro":       ["store"],
 }
 
@@ -124,13 +127,44 @@ SYNERGY_TYPES_BY_NICHE = {
 }
 
 # Âncoras de tráfego: geradores universais de fluxo (qualquer nicho)
-ANCHOR_TYPES = ["shopping_mall", "supermarket", "bank", "subway_station", "bus_station"]
+# Nota: 'transit_station' captura metrô/VLT + terminais de ônibus em Fortaleza
+# (validado via deep search Gemini — recomendação Q8 da SINTESE_CIENTIFICA.md)
+ANCHOR_TYPES = ["shopping_mall", "supermarket", "bank", "transit_station"]
 
 # Raio padrão para análise de mercado (em metros)
+# 800m ≈ 10 minutos a pé (Calthorpe TOD 1993, "10-minute city")
+# Validado em deep search Gemini — recomendação Q3 da SINTESE_CIENTIFICA.md
 MARKET_ANALYSIS_RADIUS = 800
 
 # Nº máximo de regiões top a analisar (limita uso de quota Places)
 MARKET_ANALYSIS_TOP_N = 5
+
+# ---------------------------------------------------------------------------
+# Mapeamento Places API v1 (Fase 2 — preparação para migração futura)
+# Validado via deep search Gemini (docs/RESPOSTA_GEMINI.md, Q1)
+# Inclui tipos novos da v1 não suportados na Legacy:
+#   - medical_clinic, medical_lab (Saúde)
+#   - fast_food_restaurant (Alimentação)
+# Quando migrar para POST /v1/places:searchNearby, usar este mapeamento.
+# ---------------------------------------------------------------------------
+NICHOS_PLACES_V1_MAPPING = {
+    "Alimentação":        ["restaurant", "cafe", "bakery", "fast_food_restaurant", "bar", "meal_takeaway"],
+    "Saúde":              ["pharmacy", "medical_clinic", "medical_lab", "hospital", "dentist"],
+    "Beleza":             ["beauty_salon", "hair_care", "spa"],
+    "Fitness":            ["gym", "stadium", "park"],
+    "Infantil":           ["school", "primary_school", "park"],
+    "Escolar":            ["school", "university", "library", "book_store"],
+    "Farmácia":           ["pharmacy", "medical_clinic", "hospital"],
+    "Pet":                ["pet_store", "veterinary_care"],
+    "Eletrônicos":        ["electronics_store", "shopping_mall", "department_store"],
+    "Outro":              ["shopping_mall", "supermarket"],
+}
+
+# Field mask v1 (Basic SKU + Pro SKU para userRatingCount, businessStatus)
+PLACES_V1_FIELD_MASK = (
+    "places.id,places.displayName,places.types,"
+    "places.rating,places.userRatingCount,places.businessStatus"
+)
 
 # ---------------------------------------------------------------------------
 # Sazonalidade por nicho (índice 0-100 para cada mês Jan–Dez)

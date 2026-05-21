@@ -85,85 +85,116 @@ def create_session_with_retry() -> requests.Session:
     return session
 
 # =========================
-# GOOGLE PLACES
+# GOOGLE PLACES (API v1 — POST /v1/places:searchNearby)
 # =========================
+# Migração Legacy → v1:
+# - Endpoint: POST https://places.googleapis.com/v1/places:searchNearby
+# - Headers: X-Goog-Api-Key + X-Goog-FieldMask
+# - Body JSON: includedTypes, maxResultCount (max 20), locationRestriction.circle
+# - Filtro pós-resposta: businessStatus == OPERATIONAL
+# Validado em docs/RESPOSTA_GEMINI.md (deep search Gemini)
+
+_PLACES_V1_URL = "https://places.googleapis.com/v1/places:searchNearby"
+_PLACES_V1_FIELD_MASK_COUNT = "places.id,places.businessStatus"
+_PLACES_V1_FIELD_MASK_NAMES = (
+    "places.id,places.displayName,places.businessStatus,"
+    "places.userRatingCount,places.rating"
+)
+
+
+def _places_v1_request(
+    lat: float,
+    lon: float,
+    place_type: str,
+    radius: int,
+    session: requests.Session,
+    field_mask: str,
+    max_results: int = 20,
+) -> list:
+    """
+    Faz POST /v1/places:searchNearby e retorna lista de places (já filtrada
+    para businessStatus == OPERATIONAL). Em caso de erro, retorna [].
+    """
+    if not API_KEY:
+        return []
+
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": API_KEY,
+        "X-Goog-FieldMask": field_mask,
+    }
+    body = {
+        "includedTypes": [place_type],
+        "maxResultCount": min(max(max_results, 1), 20),  # v1: hard limit 20
+        "locationRestriction": {
+            "circle": {
+                "center": {"latitude": lat, "longitude": lon},
+                "radius": float(radius),
+            }
+        },
+    }
+
+    try:
+        r = session.post(_PLACES_V1_URL, headers=headers, json=body, timeout=5)
+
+        if r.status_code in (429, 500, 502, 503):
+            print(f"⚠️  Places v1 status {r.status_code} para type={place_type}")
+            return []
+        if r.status_code == 403:
+            print("❌ Places v1 403 — verifique se a Places API (New) está habilitada")
+            return []
+        r.raise_for_status()
+
+        data = r.json()
+        places = data.get("places", []) or []
+        # Filtra apenas estabelecimentos operacionais (Gemini Q9)
+        return [
+            p for p in places
+            if p.get("businessStatus", "OPERATIONAL") == "OPERATIONAL"
+        ]
+    except requests.exceptions.Timeout:
+        print(f"⚠️  Timeout Places v1 (type={place_type}, r={radius}m)")
+        return []
+    except requests.exceptions.RequestException as e:
+        print(f"❌ Erro Places v1: {str(e)}")
+        return []
+    except Exception as e:
+        print(f"❌ Erro inesperado Places v1: {str(e)}")
+        return []
+
+
 def nearby_count(lat: float, lon: float, place_type: str, radius: int, session: requests.Session) -> int:
     """
-    Conta resultados via Nearby Search com até 3 páginas.
-    Inclui tratamento de erros e retry automático.
+    Conta POIs via Google Places API v1 (POST searchNearby).
+    Retorna nº de estabelecimentos OPERATIONAL no raio. Limite v1: 20/chamada.
     """
     if not API_KEY:
         return 0
-    
-    base = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-    params = {"location": f"{lat},{lon}", "radius": radius, "type": place_type, "key": API_KEY}
-    total, page = 0, 0
-    max_retries = 1  # Reduzido de 3 para 1
-    
-    while True:
-        try:
-            r = session.get(base, params=params, timeout=5)  # Reduzido de 30 para 5
-            
-            # Retry em erros temporários
-            if r.status_code in (429, 500, 503):
-                if page < max_retries:
-                    wait_time = min(2**page, 10)
-                    print(f"⚠️  Status {r.status_code}, aguardando {wait_time}s...")
-                    time.sleep(wait_time)
-                    page += 1
-                    continue
-                else:
-                    print(f"❌ Falha após {max_retries} tentativas")
-                    return 0
-            
-            r.raise_for_status()
-            data = r.json()
-            
-            # Verifica status da API
-            if data.get("status") == "OVER_QUERY_LIMIT":
-                print("❌ Limite de cota da API atingido")
-                return 0
-            elif data.get("status") not in ["OK", "ZERO_RESULTS"]:
-                print(f"⚠️  API retornou status: {data.get('status')}")
-                return 0
-            
-            total += len(data.get("results", []))
-            
-            # NÃO busca próximas páginas para otimizar tempo
-            # Apenas primeira página (até 20 resultados) é suficiente
-            break
-            
-        except requests.exceptions.Timeout:
-            print(f"⚠️  Timeout na requisição (tentativa {page+1}/{max_retries})")
-            if page < max_retries:
-                page += 1
-                time.sleep(2)
-                continue
-            return 0
-        except requests.exceptions.RequestException as e:
-            print(f"❌ Erro na requisição: {str(e)}")
-            return 0
-        except Exception as e:
-            print(f"❌ Erro inesperado: {str(e)}")
-            return 0
-    
-    return total
+    places = _places_v1_request(
+        lat, lon, place_type, radius, session,
+        field_mask=_PLACES_V1_FIELD_MASK_COUNT,
+        max_results=20,
+    )
+    return len(places)
+
 
 def nearby_names(lat: float, lon: float, place_type: str, radius: int, session: requests.Session, max_results: int = 5) -> list:
-    """Retorna nomes de estabelecimentos próximos via Google Places Nearby Search."""
+    """Retorna nomes de estabelecimentos próximos via Google Places API v1."""
     if not API_KEY:
         return []
-    base = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
-    params = {"location": f"{lat},{lon}", "radius": radius, "type": place_type, "key": API_KEY}
-    try:
-        r = session.get(base, params=params, timeout=5)
-        r.raise_for_status()
-        data = r.json()
-        if data.get("status") not in ["OK", "ZERO_RESULTS"]:
-            return []
-        return [p["name"] for p in data.get("results", [])[:max_results] if "name" in p]
-    except Exception:
-        return []
+    places = _places_v1_request(
+        lat, lon, place_type, radius, session,
+        field_mask=_PLACES_V1_FIELD_MASK_NAMES,
+        max_results=max_results,
+    )
+    names = []
+    for p in places[:max_results]:
+        # v1: displayName é objeto { text, languageCode }
+        dn = p.get("displayName") or {}
+        name = dn.get("text") if isinstance(dn, dict) else dn
+        if name:
+            names.append(name)
+    return names
 
 
 def enrich_row_with_pois(row: pd.Series, cache_df: pd.DataFrame, session: requests.Session, nicho: str = "Outro") -> Tuple[Dict[str,int], List[dict]]:
