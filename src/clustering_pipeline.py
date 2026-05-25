@@ -1,6 +1,7 @@
 
 from __future__ import annotations
 import os, time, argparse, hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 
@@ -105,7 +106,7 @@ _PLACES_V1_FIELD_MASK_NAMES = (
 def _places_v1_request(
     lat: float,
     lon: float,
-    place_type: str,
+    place_type: str | list,
     radius: int,
     session: requests.Session,
     field_mask: str,
@@ -114,9 +115,14 @@ def _places_v1_request(
     """
     Faz POST /v1/places:searchNearby e retorna lista de places (já filtrada
     para businessStatus == OPERATIONAL). Em caso de erro, retorna [].
+
+    place_type pode ser str (tipo único) ou list (batch de tipos — a API v1
+    aceita includedTypes como array, reduzindo o número de requisições).
     """
     if not API_KEY:
         return []
+
+    included_types = [place_type] if isinstance(place_type, str) else list(place_type)
 
     headers = {
         "Content-Type": "application/json",
@@ -124,7 +130,7 @@ def _places_v1_request(
         "X-Goog-FieldMask": field_mask,
     }
     body = {
-        "includedTypes": [place_type],
+        "includedTypes": included_types,
         "maxResultCount": min(max(max_results, 1), 20),  # v1: hard limit 20
         "locationRestriction": {
             "circle": {
@@ -135,10 +141,10 @@ def _places_v1_request(
     }
 
     try:
-        r = session.post(_PLACES_V1_URL, headers=headers, json=body, timeout=5)
+        r = session.post(_PLACES_V1_URL, headers=headers, json=body, timeout=3)
 
         if r.status_code in (429, 500, 502, 503):
-            print(f"⚠️  Places v1 status {r.status_code} para type={place_type}")
+            print(f"⚠️  Places v1 status {r.status_code} para types={included_types}")
             return []
         if r.status_code == 403:
             print("❌ Places v1 403 — verifique se a Places API (New) está habilitada")
@@ -153,7 +159,7 @@ def _places_v1_request(
             if p.get("businessStatus", "OPERATIONAL") == "OPERATIONAL"
         ]
     except requests.exceptions.Timeout:
-        print(f"⚠️  Timeout Places v1 (type={place_type}, r={radius}m)")
+        print(f"⚠️  Timeout Places v1 (types={included_types}, r={radius}m)")
         return []
     except requests.exceptions.RequestException as e:
         print(f"❌ Erro Places v1: {str(e)}")
@@ -163,9 +169,10 @@ def _places_v1_request(
         return []
 
 
-def nearby_count(lat: float, lon: float, place_type: str, radius: int, session: requests.Session) -> int:
+def nearby_count(lat: float, lon: float, place_type: str | list, radius: int, session: requests.Session) -> int:
     """
     Conta POIs via Google Places API v1 (POST searchNearby).
+    place_type pode ser str ou list (batch) — v1 suporta includedTypes como array.
     Retorna nº de estabelecimentos OPERATIONAL no raio. Limite v1: 20/chamada.
     """
     if not API_KEY:
@@ -178,7 +185,7 @@ def nearby_count(lat: float, lon: float, place_type: str, radius: int, session: 
     return len(places)
 
 
-def nearby_names(lat: float, lon: float, place_type: str, radius: int, session: requests.Session, max_results: int = 5) -> list:
+def nearby_names(lat: float, lon: float, place_type: str | list, radius: int, session: requests.Session, max_results: int = 5) -> list:
     """Retorna nomes de estabelecimentos próximos via Google Places API v1."""
     if not API_KEY:
         return []
@@ -198,46 +205,74 @@ def nearby_names(lat: float, lon: float, place_type: str, radius: int, session: 
 
 
 def enrich_row_with_pois(row: pd.Series, cache_df: pd.DataFrame, session: requests.Session, nicho: str = "Outro") -> Tuple[Dict[str,int], List[dict]]:
-    """Enriquece uma linha com POIs específicos do nicho, usando cache quando disponível."""
+    """Enriquece uma linha com POIs específicos do nicho, usando cache quando disponível.
+
+    Otimizações aplicadas:
+    - Batching: todos os tipos de um rótulo são enviados em UMA única requisição
+      (includedTypes aceita array na API v1), reduzindo 3-5x o nº de chamadas.
+    - Paralelização: as chamadas (label × radius) que não estão em cache são
+      executadas em paralelo via ThreadPoolExecutor(max_workers=8).
+    """
     try:
         lat, lon = float(row["lat"]), float(row["lon"])
-        new_records = []
-        results: Dict[str,int] = {}
-        
-        # USA POIs ESPECÍFICOS DO NICHO!
         places_types = PLACES_TYPES_BY_NICHE.get(nicho, PLACES_TYPES_BY_NICHE["Outro"])
-        
+
+        # ── 1. Separa hits de cache dos misses ─────────────────────────────
+        # Chave de cache: hash do conjunto de tipos (ordenado) + raio
+        def _hkey_batch(types_list: list, radius: int) -> str:
+            key = f"{round(lat,6)}|{round(lon,6)}|{'_'.join(sorted(types_list))}|{radius}"
+            return hashlib.md5(key.encode()).hexdigest()
+
+        tasks: list[tuple] = []   # (label, radius, types, hk)
+        results: Dict[str, int] = {}
+        new_records: List[dict] = []
+
         for label, types in places_types.items():
             for radius in RADII:
-                subtotal = 0
-                for tp in types:
-                    hk = hkey(lat, lon, tp, radius)
-                    cached = cache_df.loc[cache_df["h"] == hk]
-                    
-                    if not cached.empty:
-                        cnt = int(cached.iloc[0]["count"])
-                    else:
-                        cnt = nearby_count(lat, lon, tp, radius, session)
-                        new_records.append({
-                            "h": hk,
-                            "lat": lat,
-                            "lon": lon,
-                            "type": tp,
-                            "radius": radius,
-                            "count": cnt,
-                            "ts": int(time.time())
-                        })
-                    subtotal += cnt
-                    
-                results[f"poi_{label}_{radius}m"] = subtotal
-                
+                col = f"poi_{label}_{radius}m"
+                hk = _hkey_batch(types, radius)
+                cached = cache_df.loc[cache_df["h"] == hk]
+                if not cached.empty:
+                    results[col] = int(cached.iloc[0]["count"])
+                else:
+                    tasks.append((label, radius, types, hk, col))
+
+        if not tasks:
+            return results, new_records
+
+        # ── 2. Chamadas em paralelo para os misses ──────────────────────────
+        def _fetch(label: str, radius: int, types: list, hk: str, col: str):
+            cnt = nearby_count(lat, lon, types, radius, session)
+            return label, radius, types, hk, col, cnt
+
+        max_workers = min(8, len(tasks))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_fetch, *task): task for task in tasks}
+            for future in as_completed(futures):
+                try:
+                    label, radius, types, hk, col, cnt = future.result()
+                    results[col] = cnt
+                    new_records.append({
+                        "h": hk,
+                        "lat": lat,
+                        "lon": lon,
+                        "type": "_".join(sorted(types)),
+                        "radius": radius,
+                        "count": cnt,
+                        "ts": int(time.time()),
+                    })
+                except Exception as e:
+                    task = futures[future]
+                    col = task[4]
+                    print(f"  ⚠️ Erro na task {col}: {e}")
+                    results[col] = 0
+
         return results, new_records
-        
+
     except Exception as e:
         print(f"❌ Erro ao enriquecer linha: {str(e)}")
-        # Retorna valores zerados em caso de erro
         results = {}
-        for label in PLACES_TYPES:
+        for label in PLACES_TYPES_BY_NICHE.get(nicho, PLACES_TYPES_BY_NICHE["Outro"]):
             for radius in RADII:
                 results[f"poi_{label}_{radius}m"] = 0
         return results, []
@@ -650,22 +685,24 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
             import time as time_module
             inicio = time_module.time()
             
-            for idx, row in locais_amostra.iterrows():
+            # ── Paraleliza o enriquecimento por local ──────────────────────
+            def _enrich_local(row_tuple):
+                idx, row = row_tuple
                 try:
-                    # PASSA O NICHO PARA BUSCAR POIs ESPECÍFICOS!
-                    feats, new_records = enrich_row_with_pois(row, cache, sess, nicho=nicho)
-                    pois_por_local[(row['lat_round'], row['lon_round'])] = feats
-                    
-                    if new_records:
-                        all_new.extend(new_records)
-                    
-                    # Progress
-                    print(f"  ✓ {len(pois_por_local)}/{max_locais} locais")
-                    
+                    feats, new_recs = enrich_row_with_pois(row, cache, sess, nicho=nicho)
+                    return (row['lat_round'], row['lon_round']), feats, new_recs
                 except Exception as e:
                     print(f"  ⚠️ Erro no local {idx}: {str(e)}")
-                    # Continua mesmo com erro
-                    pois_por_local[(row['lat_round'], row['lon_round'])] = {}
+                    return (row['lat_round'], row['lon_round']), {}, []
+
+            rows_list = list(locais_amostra.iterrows())
+            with ThreadPoolExecutor(max_workers=min(4, len(rows_list))) as pool:
+                futures_loc = [pool.submit(_enrich_local, r) for r in rows_list]
+                for i, future in enumerate(as_completed(futures_loc)):
+                    key, feats, new_recs = future.result()
+                    pois_por_local[key] = feats
+                    all_new.extend(new_recs)
+                    print(f"  ✓ {len(pois_por_local)}/{max_locais} locais")
             
             tempo_total = time_module.time() - inicio
             print(f"⏱️  Tempo de enriquecimento: {tempo_total:.1f}s")

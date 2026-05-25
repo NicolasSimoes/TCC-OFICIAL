@@ -33,9 +33,9 @@ PLACES_API_CONFIG = {
     "retry_status_codes": [429, 500, 502, 503, 504],
 }
 
-# Raios de busca de POIs (em metros)
-# Valores enxutos (2 raios) para reduzir consumo de quota Google Places.
-SEARCH_RADII = [500, 1000]
+# Raio de busca de POIs (em metros)
+# 800m = ~10 min a pé (Calthorpe, 1993) — único raio para reduzir chamadas à API.
+SEARCH_RADII = [800]
 
 # Tipos de POIs por nicho (single source of truth para todo o pipeline)
 PLACES_TYPES_BY_NICHE = {
