@@ -40,22 +40,20 @@ SEARCH_RADII = [800]
 # Tipos de POIs por nicho (single source of truth para todo o pipeline)
 PLACES_TYPES_BY_NICHE = {
     "Fitness": {
-        "gym": ["gym", "health"],
+        "gym": ["gym"],
         "park": ["park"],
         "sports": ["stadium", "sports_complex"],
     },
     "Infantil": {
         "school": ["school", "primary_school"],
         "park": ["park", "playground"],
-        "childcare": ["day_care"],
     },
     "Escolar": {
         "school": ["school", "university"],
         "library": ["library", "book_store"],
-        "stationery": ["stationery_store"],
     },
     "Alimentação": {
-        "supermarket": ["supermarket", "grocery_or_supermarket", "convenience_store"],
+        "supermarket": ["supermarket", "convenience_store"],
         "restaurant": ["restaurant", "cafe", "bakery", "bar", "meal_takeaway"],
     },
     "Farmácia": {
@@ -82,7 +80,6 @@ PLACES_TYPES_BY_NICHE = {
         "health": ["hospital", "doctor", "physiotherapist"],
         "pharmacy": ["pharmacy", "drugstore"],
         "dental": ["dentist"],
-        "lab": ["medical_lab"],
     },
 }
 
@@ -91,7 +88,7 @@ DEFAULT_PLACES_TYPES = {
     "gym": ["gym"],
     "office": ["bank", "real_estate_agency", "insurance_agency", "lawyer"],
     "university": ["university"],
-    "supermarket": ["supermarket", "grocery_or_supermarket"],
+    "supermarket": ["supermarket"],
 }
 
 # ---------------------------------------------------------------------------
