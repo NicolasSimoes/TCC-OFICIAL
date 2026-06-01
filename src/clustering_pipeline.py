@@ -655,19 +655,58 @@ _last_clustering_metrics: Dict = {}
 # =========================
 # GRID FORTALEZA (Places API)
 # =========================
-# Bounding box aproximado de Fortaleza-CE
-_FTZ_LAT_MIN, _FTZ_LAT_MAX = -3.825, -3.690
-_FTZ_LON_MIN, _FTZ_LON_MAX = -38.635, -38.420
-_FTZ_GRID_STEP = 0.015   # ~1.7 km → ~130 pontos cobrindo toda a cidade
+# 30 pontos estratégicos cobrindo os principais bairros de Fortaleza.
+# Grid fixo (passo ~3 km) garante resposta em <15s com 20 workers paralelos.
+# Os pontos foram escolhidos para cobrir tanto o litoral (bairros nobres)
+# quanto o interior (bairros populares com alto volume comercial).
+_FTZ_GRID_PONTOS = [
+    # Litoral Leste / Zona Nobre
+    (-3.7200, -38.5010),  # Meireles / Iracema
+    (-3.7240, -38.4850),  # Mucuripe / Coco
+    (-3.7400, -38.5020),  # Aldeota
+    (-3.7440, -38.4860),  # Papicu
+    (-3.7560, -38.4750),  # Edson Queiroz
+    (-3.7680, -38.4730),  # Salinas
+    # Centro Expandido
+    (-3.7200, -38.5430),  # Centro
+    (-3.7350, -38.5300),  # Benfica / São Gerardo
+    (-3.7550, -38.5450),  # Fátima / Damas
+    (-3.7680, -38.5300),  # Jóquei Clube / Montese
+    (-3.7450, -38.5600),  # Antônio Bezerra / Otávio Bonfim
+    (-3.7300, -38.5700),  # Barra do Ceará / Cristo Redentor
+    # Zona Sul / Interior
+    (-3.7850, -38.5100),  # Maraponga / Canindezinho
+    (-3.7900, -38.5400),  # Parangaba / Mondubim
+    (-3.8050, -38.5600),  # Conjunto Ceará
+    (-3.8150, -38.4950),  # Messejana
+    (-3.7960, -38.4850),  # Alagadiço / Dendê
+    (-3.8000, -38.5200),  # José Walter
+    # Zona Oeste
+    (-3.7500, -38.5900),  # Autran Nunes / Henrique Jorge
+    (-3.7700, -38.5700),  # Granja Lisboa / Granja Portugal
+    (-3.7600, -38.6100),  # Bom Jardim / Siqueira
+    (-3.7850, -38.5950),  # Araturi / Novo Mondubim
+    # Zona Leste / Praia do Futuro
+    (-3.7550, -38.4550),  # Praia do Futuro
+    (-3.7800, -38.4700),  # Sabiaguaba
+    # Pontos extras para melhor cobertura
+    (-3.7650, -38.5150),  # Amadeu Furtado / Joaquim Távora
+    (-3.7300, -38.5150),  # Varjota / Dionísio Torres
+    (-3.7100, -38.5250),  # Pirambu / Moura Brasil
+    (-3.7950, -38.5750),  # Bom Sucesso / Prefeito José Walter
+    (-3.7600, -38.5350),  # Parreão / João XXIII
+    (-3.8100, -38.5350),  # Guajeru / Planalto Ayrton Senna
+]
 
 
 def buscar_grid_fortaleza(nicho: str, session: requests.Session) -> pd.DataFrame:
     """
-    Mapeia a cidade de Fortaleza via Google Places API v1 usando uma grade
-    uniforme. Para cada ponto da grade, conta quantos POIs do nicho existem
-    num raio de 800 m (Calthorpe 1993 — ~10 min a pé).
+    Mapeia os principais bairros de Fortaleza via Google Places API v1.
 
-    Essa densidade de POIs funciona como proxy da demanda/fluxo local:
+    Para cada um dos 30 pontos estratégicos da grade, conta quantos POIs do
+    nicho existem num raio de 800 m (Calthorpe 1993 — ~10 min a pé).
+
+    A densidade de POIs funciona como proxy da demanda/fluxo local:
     onde há muitos estabelecimentos congêneres, há público-alvo.
 
     Retorna DataFrame com colunas [lat, lon, poi_count], apenas pontos com
@@ -677,16 +716,11 @@ def buscar_grid_fortaleza(nicho: str, session: requests.Session) -> pd.DataFrame
         print("❌ GOOGLE_API_KEY não configurada — busca em grade requer a API")
         return pd.DataFrame(columns=["lat", "lon", "poi_count"])
 
-    lats = np.arange(_FTZ_LAT_MIN, _FTZ_LAT_MAX, _FTZ_GRID_STEP)
-    lons = np.arange(_FTZ_LON_MIN, _FTZ_LON_MAX, _FTZ_GRID_STEP)
-    grid = [(float(lat), float(lon)) for lat in lats for lon in lons]
-
     places_types = PLACES_TYPES_BY_NICHE.get(nicho, PLACES_TYPES_BY_NICHE["Outro"])
-    # Todos os tipos do nicho num único batch por ponto da grade
-    # (API v1 aceita includedTypes como array → 1 chamada por ponto)
     all_types = list({t for types_list in places_types.values() for t in types_list})
 
-    print(f"🗺️  Grade Fortaleza: {len(grid)} pontos | nicho='{nicho}' | {len(all_types)} tipos de POI")
+    print(f"🗺️  Grade Fortaleza: {len(_FTZ_GRID_PONTOS)} pontos | "
+          f"nicho='{nicho}' | tipos: {all_types}")
 
     def _fetch(lat_lon: tuple) -> dict:
         lat, lon = lat_lon
@@ -696,18 +730,24 @@ def buscar_grid_fortaleza(nicho: str, session: requests.Session) -> pd.DataFrame
                 field_mask=_PLACES_V1_FIELD_MASK_COUNT,
                 max_results=20,
             )
-            return {"lat": lat, "lon": lon, "poi_count": len(places)}
-        except Exception:
+            cnt = len(places)
+            if cnt > 0:
+                print(f"  ✓ ({lat:.4f},{lon:.4f}) → {cnt} POIs")
+            return {"lat": lat, "lon": lon, "poi_count": cnt}
+        except Exception as exc:
+            print(f"  ⚠ ({lat:.4f},{lon:.4f}) erro: {exc}")
             return {"lat": lat, "lon": lon, "poi_count": 0}
 
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        resultados = list(pool.map(_fetch, grid))
+    # 20 workers para 30 pontos → ~2 rodadas de chamadas paralelas (~6–10s)
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        resultados = list(pool.map(_fetch, _FTZ_GRID_PONTOS))
 
     df = pd.DataFrame(resultados)
-    df_ativos = df[df["poi_count"] > 0].copy().reset_index(drop=True)
-    print(f"✓ {len(df_ativos)} pontos ativos (de {len(grid)} na grade) | "
-          f"máx POIs/ponto: {int(df['poi_count'].max())}")
-    return df_ativos
+    n_ativos = int((df["poi_count"] > 0).sum())
+    poi_max = int(df["poi_count"].max()) if not df.empty else 0
+    print(f"✓ {n_ativos} pontos ativos (de {len(_FTZ_GRID_PONTOS)}) | "
+          f"máx POIs/ponto: {poi_max}")
+    return df[df["poi_count"] > 0].copy().reset_index(drop=True)
 
 
 def gerar_regioes_ideais_com_metricas(produto: str, filtros: dict, nicho: str = None) -> Tuple[list, Dict]:
@@ -752,7 +792,10 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
         df_grid = buscar_grid_fortaleza(nicho, sess)
 
         if len(df_grid) < 6:
-            print(f"⚠️  Apenas {len(df_grid)} pontos com POIs — insuficiente para clustering")
+            print(f"⚠️  Apenas {len(df_grid)} pontos com POIs retornados.")
+            print("   Causas prováveis: chave da API sem 'Places API (New)' habilitada,")
+            print("   quota esgotada, ou todos os tipos de POI sem resultados na cidade.")
+            print("   Verifique GOOGLE_API_KEY no Railway e habilite 'Places API (New)'.")
             return []
 
         # ── 2. Features para clustering (coordenadas + densidade de POIs) ──
