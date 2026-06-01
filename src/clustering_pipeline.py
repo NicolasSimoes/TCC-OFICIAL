@@ -899,7 +899,7 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
                 "score": cand["score_100"],
                 "classe_med": 0.0,
                 "poi_med": float(cand["poi_count"]),
-                "tipo_comercial": "N/A",
+                "tipo_comercial": nicho,
                 "classe_social": "N/A",
             })
 
