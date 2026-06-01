@@ -813,7 +813,7 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
         X = StandardScaler().fit_transform(X_raw)
 
         # ── 3. Clustering ───────────────────────────────────────────────────
-        n_clusters_max = min(6, max(3, len(df_grid) // 10))
+        n_clusters_max = min(8, max(4, len(df_grid) // 5))
         elbow_data = calcular_elbow(X, k_range=range(2, n_clusters_max + 2))
         n_clusters = min(_knee_point(elbow_data), n_clusters_max)
         print(f"  ✓ Elbow: k={n_clusters} (max={n_clusters_max})")
@@ -848,8 +848,8 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
         print(f"\n📊 {n_total_clusters} zonas | score (POI médio): "
               f"{cluster_scores.round(1).to_dict()}")
 
-        # ── 5. Top 3 candidatos por cluster (pontos com mais POIs) ──────────
-        CANDIDATOS_POR_CLUSTER = 3
+        # ── 5. Top 5 candidatos por cluster (pontos com mais POIs) ──────────
+        CANDIDATOS_POR_CLUSTER = 5
         todos_candidatos: list = []
 
         for rank_zona, (cluster_id, score_medio) in enumerate(cluster_scores.items(), 1):
