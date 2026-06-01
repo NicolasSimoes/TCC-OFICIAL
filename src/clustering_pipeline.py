@@ -652,6 +652,63 @@ def rank_clusters(df_feat: pd.DataFrame, labels: np.ndarray, nicho: str = "Outro
 # Armazena métricas da última execução para acesso pela API
 _last_clustering_metrics: Dict = {}
 
+# =========================
+# GRID FORTALEZA (Places API)
+# =========================
+# Bounding box aproximado de Fortaleza-CE
+_FTZ_LAT_MIN, _FTZ_LAT_MAX = -3.825, -3.690
+_FTZ_LON_MIN, _FTZ_LON_MAX = -38.635, -38.420
+_FTZ_GRID_STEP = 0.015   # ~1.7 km → ~130 pontos cobrindo toda a cidade
+
+
+def buscar_grid_fortaleza(nicho: str, session: requests.Session) -> pd.DataFrame:
+    """
+    Mapeia a cidade de Fortaleza via Google Places API v1 usando uma grade
+    uniforme. Para cada ponto da grade, conta quantos POIs do nicho existem
+    num raio de 800 m (Calthorpe 1993 — ~10 min a pé).
+
+    Essa densidade de POIs funciona como proxy da demanda/fluxo local:
+    onde há muitos estabelecimentos congêneres, há público-alvo.
+
+    Retorna DataFrame com colunas [lat, lon, poi_count], apenas pontos com
+    poi_count > 0 (pontos "ativos" para o nicho).
+    """
+    if not API_KEY:
+        print("❌ GOOGLE_API_KEY não configurada — busca em grade requer a API")
+        return pd.DataFrame(columns=["lat", "lon", "poi_count"])
+
+    lats = np.arange(_FTZ_LAT_MIN, _FTZ_LAT_MAX, _FTZ_GRID_STEP)
+    lons = np.arange(_FTZ_LON_MIN, _FTZ_LON_MAX, _FTZ_GRID_STEP)
+    grid = [(float(lat), float(lon)) for lat in lats for lon in lons]
+
+    places_types = PLACES_TYPES_BY_NICHE.get(nicho, PLACES_TYPES_BY_NICHE["Outro"])
+    # Todos os tipos do nicho num único batch por ponto da grade
+    # (API v1 aceita includedTypes como array → 1 chamada por ponto)
+    all_types = list({t for types_list in places_types.values() for t in types_list})
+
+    print(f"🗺️  Grade Fortaleza: {len(grid)} pontos | nicho='{nicho}' | {len(all_types)} tipos de POI")
+
+    def _fetch(lat_lon: tuple) -> dict:
+        lat, lon = lat_lon
+        try:
+            places = _places_v1_request(
+                lat, lon, all_types, 800, session,
+                field_mask=_PLACES_V1_FIELD_MASK_COUNT,
+                max_results=20,
+            )
+            return {"lat": lat, "lon": lon, "poi_count": len(places)}
+        except Exception:
+            return {"lat": lat, "lon": lon, "poi_count": 0}
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        resultados = list(pool.map(_fetch, grid))
+
+    df = pd.DataFrame(resultados)
+    df_ativos = df[df["poi_count"] > 0].copy().reset_index(drop=True)
+    print(f"✓ {len(df_ativos)} pontos ativos (de {len(grid)} na grade) | "
+          f"máx POIs/ponto: {int(df['poi_count'].max())}")
+    return df_ativos
+
 
 def gerar_regioes_ideais_com_metricas(produto: str, filtros: dict, nicho: str = None) -> Tuple[list, Dict]:
     """
@@ -668,308 +725,128 @@ def gerar_regioes_ideais_com_metricas(produto: str, filtros: dict, nicho: str = 
 
 def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list:
     """
-    Gera regiões ideais para venda com base no produto e filtros.
-    Retorna lista de dicts: [{lat, lon, nome, motivo, cluster, score, classe_med, poi_med}]
+    Gera regiões ideais para abertura de negócio via Google Places API.
 
-    Para acessar as métricas de clustering junto com o resultado,
-    use gerar_regioes_ideais_com_metricas() em vez desta função.
+    Abordagem: busca em grade uniforme sobre Fortaleza — para cada ponto da
+    grade, conta POIs relevantes ao nicho num raio de 800 m. Os pontos com
+    maior densidade de POIs são clusterizados e os candidatos de cada zona
+    têm o bairro obtido por reverse geocoding (sem dependência de Excel).
+
+    Retorna lista de dicts: [{lat, lon, nome, motivo, cluster, score, poi_med}]
     """
     try:
-        # Inicializa métricas (populado mais adiante após clustering)
+        global _last_clustering_metrics
         _metricas_finais: Dict = {}
 
         from nlp import identificar_nicho
         if nicho is None:
             nicho = identificar_nicho(produto)
 
-        usar_api = filtros.get("usar_api", False)
-        
-        # ...código de carregamento e filtro igual...
-        base_dir = Path(__file__).parent.parent
-        data_dir = base_dir / "data"
-        data_path = data_dir / "Projeto.xlsx"
-        if not data_path.exists():
-            data_path = data_dir / "clientes_enriquecidos.csv"
-            if not data_path.exists():
-                data_path = data_dir / "clientes.csv"
-        if not data_path.exists():
-            print(f"❌ Nenhum arquivo de dados encontrado em: {data_dir}")
-            print(f"   Procurei por: Projeto.xlsx, clientes_enriquecidos.csv, clientes.csv")
-            return []
-        print(f"📂 Carregando dados de: {data_path}")
-        
-        # OTIMIZAÇÃO: Limita leitura inicial para acelerar
-        if data_path.suffix == '.xlsx':
-            df = carregar_e_preparar_dados(str(data_path), sheet_name="BASE")
-        else:
-            df = carregar_e_preparar_dados(str(data_path), sheet_name=None)
-        
-        # OTIMIZAÇÃO CRÍTICA: Se dataset muito grande, amostra inicialmente
-        if len(df) > 5000:
-            print(f"⚡ Dataset grande ({len(df)} registros), amostrando 5000 para performance")
-            # Amostra estratificada por classe para manter distribuição
-            if 'classe' in df.columns:
-                df = df.groupby('classe', group_keys=False).apply(
-                    lambda x: x.sample(min(len(x), 1000), random_state=42)
-                )
-            else:
-                df = df.sample(5000, random_state=42)
-        
-        # Enriquece com POIs se solicitado
-        if usar_api and API_KEY:
-            print(f"🔍 Enriquecendo dados com Google Places API...")
-            
-            # OTIMIZAÇÃO AGRESSIVA: Limita a apenas 10 locais representativos
-            # Agrupa por coordenadas próximas (arredonda para 2 casas decimais = ~1km)
-            df['lat_round'] = df['lat'].round(2)
-            df['lon_round'] = df['lon'].round(2)
-            locais_unicos = df.drop_duplicates(subset=['lat_round', 'lon_round'])
-            
-            # Limita a no máximo 10 locais (suficiente para análise, mais rápido)
-            max_locais = min(10, len(locais_unicos))
-            locais_amostra = locais_unicos.head(max_locais)
-            
-            print(f"📊 Enriquecendo {max_locais} localizações para nicho '{nicho}'")
-            print(f"🔍 POIs buscados: {list(PLACES_TYPES_BY_NICHE.get(nicho, PLACES_TYPES_BY_NICHE['Outro']).keys())}")
-            print(f"⏱️  Tempo estimado: ~{max_locais * 2} segundos")
-            
-            cache = load_cache()
-            sess = create_session_with_retry()
-            all_new = []
-            pois_por_local = {}
-            
-            import time as time_module
-            inicio = time_module.time()
-            
-            # ── Paraleliza o enriquecimento por local ──────────────────────
-            def _enrich_local(row_tuple):
-                idx, row = row_tuple
-                try:
-                    feats, new_recs = enrich_row_with_pois(row, cache, sess, nicho=nicho)
-                    return (row['lat_round'], row['lon_round']), feats, new_recs
-                except Exception as e:
-                    print(f"  ⚠️ Erro no local {idx}: {str(e)}")
-                    return (row['lat_round'], row['lon_round']), {}, []
-
-            rows_list = list(locais_amostra.iterrows())
-            with ThreadPoolExecutor(max_workers=min(4, len(rows_list))) as pool:
-                futures_loc = [pool.submit(_enrich_local, r) for r in rows_list]
-                for i, future in enumerate(as_completed(futures_loc)):
-                    key, feats, new_recs = future.result()
-                    pois_por_local[key] = feats
-                    all_new.extend(new_recs)
-                    print(f"  ✓ {len(pois_por_local)}/{max_locais} locais")
-            
-            tempo_total = time_module.time() - inicio
-            print(f"⏱️  Tempo de enriquecimento: {tempo_total:.1f}s")
-            
-            # Propaga POIs para todos os registros próximos
-            for idx, row in df.iterrows():
-                key = (row['lat_round'], row['lon_round'])
-                if key in pois_por_local:
-                    for k, v in pois_por_local[key].items():
-                        df.at[idx, k] = v
-            
-            # Remove colunas temporárias
-            df.drop(['lat_round', 'lon_round'], axis=1, inplace=True)
-            
-            if all_new:
-                cache = pd.concat([cache, pd.DataFrame(all_new)], ignore_index=True)
-                save_cache(cache)
-            print(f"✓ Enriquecimento completo! {len(pois_por_local)} locais únicos com POIs")
-        elif usar_api and not API_KEY:
-            print("⚠️ API solicitada mas GOOGLE_API_KEY não configurada no .env")
-        
-        # Se não tem POIs, cria colunas zeradas ESPECÍFICAS DO NICHO
-        poi_cols_existentes = [c for c in df.columns if c.startswith("poi_") and c.endswith("m")]
-        if not poi_cols_existentes:
-            # Usa POIs do nicho específico!
-            places_types = PLACES_TYPES_BY_NICHE.get(nicho, PLACES_TYPES_BY_NICHE["Outro"])
-            for label in places_types:
-                for r in RADII:
-                    df[f"poi_{label}_{r}m"] = 0
-            print(f"📍 POIs zerados criados para nicho '{nicho}': {list(places_types.keys())}")
-
-        df_filtrado = df.copy()
-        if filtros.get("classe") and len(filtros["classe"]) > 0:
-            df_filtrado = df_filtrado[df_filtrado["classe"].isin(filtros["classe"])]
-            print(f"  ✓ Filtro classe: {filtros['classe']} -> {len(df_filtrado)} registros")
-        if filtros.get("tipo") and filtros["tipo"]:
-            df_filtrado = df_filtrado[df_filtrado["tipo_comercial"].str.upper() == filtros["tipo"].upper()]
-            print(f"  ✓ Filtro tipo: {filtros['tipo']} -> {len(df_filtrado)} registros")
-        if filtros.get("bairro") and len(filtros["bairro"]) > 0:
-            df_filtrado = df_filtrado[df_filtrado["bairro"].str.upper().isin([b.upper() for b in filtros["bairro"]])]
-            print(f"  ✓ Filtro bairro: {filtros['bairro']} -> {len(df_filtrado)} registros")
-        if len(df_filtrado) == 0:
-            print("⚠️  Nenhum registro após aplicar filtros")
+        if not API_KEY:
+            print("❌ GOOGLE_API_KEY não configurada — análise requer a API")
             return []
 
-        df_feat, num_cols, cat_cols = build_features(df_filtrado)
-        ct = ColumnTransformer([
-            ("num", StandardScaler(), num_cols),
-            ("cat", OneHotEncoder(handle_unknown="ignore", sparse_output=False), cat_cols)
-        ], remainder="drop")
-        # OTIMIZADO: fit_transform e clustering com parâmetros mais rápidos
-        X = ct.fit_transform(df_feat[num_cols + cat_cols])
+        sess = create_session_with_retry()
 
-        # Elbow Method — calcula ANTES de escolher k para usar o knee point
-        # Permite até 6 clusters (mais pontos no mapa para o empreendedor avaliar)
-        n_clusters_max = min(6, max(3, len(df_feat) // 20))
+        # ── 1. Busca POIs em grade sobre Fortaleza ──────────────────────────
+        df_grid = buscar_grid_fortaleza(nicho, sess)
+
+        if len(df_grid) < 6:
+            print(f"⚠️  Apenas {len(df_grid)} pontos com POIs — insuficiente para clustering")
+            return []
+
+        # ── 2. Features para clustering (coordenadas + densidade de POIs) ──
+        poi_max = float(df_grid["poi_count"].max())
+        df_grid["poi_norm"] = df_grid["poi_count"] / poi_max
+
+        # Coordenadas com peso duplo para clustering espacialmente coerente
+        X_raw = np.column_stack([
+            df_grid["lat"].values,
+            df_grid["lon"].values,
+            df_grid["lat"].values,
+            df_grid["lon"].values,
+            df_grid["poi_norm"].values,
+        ])
+        X = StandardScaler().fit_transform(X_raw)
+
+        # ── 3. Clustering ───────────────────────────────────────────────────
+        n_clusters_max = min(6, max(3, len(df_grid) // 10))
         elbow_data = calcular_elbow(X, k_range=range(2, n_clusters_max + 2))
-
-        # Usa a máxima curvatura (knee) como k ótimo, limitado ao máximo calculado
         n_clusters = min(_knee_point(elbow_data), n_clusters_max)
-        print(f"  ✓ Elbow knee point: k={n_clusters} (base max={n_clusters_max})")
+        print(f"  ✓ Elbow: k={n_clusters} (max={n_clusters_max})")
 
-        # Comparação KMeans vs DBSCAN — escolhe o melhor automaticamente
         comparacao = comparar_kmeans_dbscan(X, n_clusters=n_clusters)
         labels = comparacao["labels_escolhidos"]
 
-        # Métricas do algoritmo vencedor
         _metricas_finais = {
             "algoritmo": comparacao["melhor_algoritmo"],
             "justificativa": comparacao["justificativa"],
-            "silhouette": comparacao["kmeans" if comparacao["melhor_algoritmo"] == "KMeans" else "dbscan"].get("silhouette"),
-            "davies_bouldin": comparacao["kmeans" if comparacao["melhor_algoritmo"] == "KMeans" else "dbscan"].get("davies_bouldin"),
+            "silhouette": comparacao[
+                "kmeans" if comparacao["melhor_algoritmo"] == "KMeans" else "dbscan"
+            ].get("silhouette"),
+            "davies_bouldin": comparacao[
+                "kmeans" if comparacao["melhor_algoritmo"] == "KMeans" else "dbscan"
+            ].get("davies_bouldin"),
             "kmeans": comparacao["kmeans"],
             "dbscan": comparacao["dbscan"],
             "elbow": elbow_data,
         }
 
-        # Se DBSCAN foi escolhido, pode ter mais ou menos clusters
-        n_clusters_final = len(set(labels)) - (1 if -1 in labels else 0)
+        df_grid["cluster"] = labels
+        df_grid = df_grid[df_grid["cluster"] != -1].copy()   # remove ruído DBSCAN
 
-        ranking = rank_clusters(df_feat, labels, nicho)
-        print(f"\n📊 Ranking de clusters (top 3):")
-        print(ranking.head(3).to_string(index=False))
-        top_clusters = ranking["cluster"].tolist()
-        n_total_clusters = len(top_clusters)
-        regioes = []
+        # ── 4. Ranking de clusters por densidade média de POIs ──────────────
+        cluster_scores = (
+            df_grid.groupby("cluster")["poi_count"]
+            .mean()
+            .sort_values(ascending=False)
+        )
+        n_total_clusters = len(cluster_scores)
+        print(f"\n📊 {n_total_clusters} zonas | score (POI médio): "
+              f"{cluster_scores.round(1).to_dict()}")
 
-        # Verifica se existem dados de POI reais
-        poi_norm_check = [c for c in df_feat.columns if c.startswith("poi_") and c.endswith("_norm")]
-        tem_poi_real = any(float(df_feat[c].sum()) > 0 for c in poi_norm_check) if poi_norm_check else False
-        peso_poi, peso_classe = get_pesos_score_por_nicho(nicho)
-
-        # Traduções de nomes técnicos de POI para exibição
-        traducoes_poi = {
-            "gym": "Academias", "office": "Escritórios", "university": "Universidades",
-            "supermarket": "Supermercados", "school": "Escolas", "park": "Parques",
-            "health": "Saúde", "beauty": "Beleza", "pet": "Pet shops",
-            "electronics": "Eletrônicos", "pharmacy": "Farmácias", "restaurant": "Restaurantes",
-            "dental": "Clínicas dentárias", "lab": "Laboratórios", "sports": "Esportes",
-            "library": "Bibliotecas", "stationery": "Papelarias", "shopping": "Shoppings",
-            "childcare": "Creches",
-        }
-
-        # Sessão única para todos os geocodings desta análise
-        sess_geo = create_session_with_retry() if API_KEY else None
-
-        # ── CANDIDATOS_POR_CLUSTER: quantos locais mostrar por zona ────────
-        # 3 pontos por cluster × até 6 clusters = até 18 pontos no mapa.
-        # São os pontos reais do dataset mais próximos do centroide de cada
-        # cluster — representam locais físicos onde o empreendedor pode abrir.
+        # ── 5. Top 3 candidatos por cluster (pontos com mais POIs) ──────────
         CANDIDATOS_POR_CLUSTER = 3
-
-        # ── Passo 1: coleta todos os candidatos (sem geocoding ainda) ──────
         todos_candidatos: list = []
 
-        for cluster_id in top_clusters:
-            subset = df_feat[labels == cluster_id]
-            cluster_info = ranking[ranking["cluster"] == cluster_id].iloc[0]
-
-            # Centroide robusto: mediana geográfica do cluster
-            lat_med = float(subset["lat"].median())
-            lon_med = float(subset["lon"].median())
-
-            # Distância euclidiana de cada ponto ao centroide
-            dist = np.sqrt(
-                (subset["lat"] - lat_med) ** 2 + (subset["lon"] - lon_med) ** 2
-            )
-            subset_com_dist = subset.copy()
-            subset_com_dist["_dist"] = dist
-
-            # Top N mais próximos ao centroide, sem duplicatas de coordenada
-            candidatos_cluster = (
-                subset_com_dist
-                .sort_values("_dist")
+        for rank_zona, (cluster_id, score_medio) in enumerate(cluster_scores.items(), 1):
+            subset = (
+                df_grid[df_grid["cluster"] == cluster_id]
                 .drop_duplicates(subset=["lat", "lon"])
-                .head(CANDIDATOS_POR_CLUSTER)
+                .sort_values("poi_count", ascending=False)
             )
+            candidatos = subset.head(CANDIDATOS_POR_CLUSTER)
+            score_100 = round(min(score_medio / poi_max * 100, 100.0), 1)
 
-            # Métricas agregadas do cluster inteiro (para score e popup)
-            poi_norm_cols = [c for c in subset.columns if c.startswith("poi_") and c.endswith("_norm")]
-            cluster_poi_med = float(subset[poi_norm_cols].mean().mean()) if poi_norm_cols else 0.0
-            cluster_classe_med = float(subset["classe_ord"].mean()) if "classe_ord" in subset.columns else 3.0
-
-            if tem_poi_real and cluster_poi_med > 0.001:
-                score_raw = peso_poi * cluster_poi_med + peso_classe * (cluster_classe_med / 5.0)
-            else:
-                rank_bonus = (n_total_clusters - int(cluster_info["ordem"]) + 1) / n_total_clusters
-                score_raw = 0.70 * (cluster_classe_med / 5.0) + 0.30 * rank_bonus
-            score_100 = round(min(max(score_raw * 100, 0.0), 100.0), 1)
-
-            # POIs relevantes: mediana dos brutos do cluster
-            poi_cols_brutos = [c for c in subset.columns if c.startswith("poi_") and c.endswith("m") and not c.endswith("_norm")]
-            pois_relevantes: dict = {}
-            for c in poi_cols_brutos:
-                try:
-                    valor = int(float(subset[c].median()))
-                    if valor > 0:
-                        nome_limpo = c.replace("poi_", "").rsplit("_", 1)[0]
-                        nome_exibir = traducoes_poi.get(nome_limpo, nome_limpo.title())
-                        pois_relevantes[nome_exibir] = pois_relevantes.get(nome_exibir, 0) + valor
-                except (ValueError, TypeError):
-                    continue
-
-            # Tipo e classe predominantes no cluster
-            tipo_col = "tipo_comercial" if "tipo_comercial" in subset.columns else None
-            tipo_otimo = subset[tipo_col].mode().iloc[0] if tipo_col and not subset[tipo_col].mode().empty else "N/A"
-            classe_col = "classe" if "classe" in subset.columns else None
-            classe_otima = subset[classe_col].mode().iloc[0] if classe_col and not subset[classe_col].mode().empty else "C"
-
-            for rank_local, (_, row) in enumerate(candidatos_cluster.iterrows(), 1):
+            for rank_local, (_, row) in enumerate(candidatos.iterrows(), 1):
                 todos_candidatos.append({
                     "lat": float(row["lat"]),
                     "lon": float(row["lon"]),
                     "cluster_id": int(cluster_id),
-                    "rank_zona": int(cluster_info["ordem"]),
+                    "rank_zona": rank_zona,
                     "rank_local": rank_local,
+                    "poi_count": int(row["poi_count"]),
                     "score_100": score_100,
-                    "cluster_classe_med": cluster_classe_med,
-                    "cluster_poi_med": float(cluster_info["poi_med"]),
-                    "tipo_otimo": tipo_otimo,
-                    "classe_otima": classe_otima,
-                    "pois_relevantes": pois_relevantes,
                     "n_membros": len(subset),
                 })
 
-        # ── Passo 2: geocoding de todos os candidatos em paralelo ──────────
+        # ── 6. Reverse geocoding de todos os candidatos em paralelo ─────────
         def _geocode_cand(cand: dict) -> dict:
-            if sess_geo:
-                bairro = reverse_geocode_bairro(cand["lat"], cand["lon"], sess_geo)
-            else:
-                bairro = "Fortaleza"
+            bairro = reverse_geocode_bairro(cand["lat"], cand["lon"], sess)
             return {**cand, "bairro": bairro}
 
         with ThreadPoolExecutor(max_workers=min(8, max(1, len(todos_candidatos)))) as pool:
             candidatos_geo = list(pool.map(_geocode_cand, todos_candidatos))
 
-        # ── Passo 3: monta lista de regioes ────────────────────────────────
+        # ── 7. Monta lista de regiões ────────────────────────────────────────
+        regioes: list = []
         for cand in candidatos_geo:
-            pois_relevantes = cand["pois_relevantes"]
             motivo_parts = [
-                f"🏆 Zona #{cand['rank_zona']} de {n_total_clusters} · Ponto {cand['rank_local']} de {CANDIDATOS_POR_CLUSTER}",
-                f"👥 Classe média da zona: {cand['cluster_classe_med']:.1f}/5.0 ({cand['n_membros']} clientes)",
+                f"🏆 Zona #{cand['rank_zona']} de {n_total_clusters} · "
+                f"Ponto {cand['rank_local']} de {CANDIDATOS_POR_CLUSTER}",
+                f"📍 {cand['poi_count']} estabelecimentos relevantes num raio de 800 m",
                 f"⭐ Score potencial: {cand['score_100']:.1f}/100",
             ]
-            if pois_relevantes:
-                top_pois = sorted(pois_relevantes.items(), key=lambda x: x[1], reverse=True)[:3]
-                pois_str = ", ".join([f"{nome} ({qtd})" for nome, qtd in top_pois])
-                motivo_parts.append(f"📍 POIs próximos: {pois_str}")
-            else:
-                motivo_parts.append("📍 Ative a API para ver estabelecimentos próximos")
-
             regioes.append({
                 "lat": cand["lat"],
                 "lon": cand["lon"],
@@ -977,39 +854,17 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
                 "motivo": " | ".join(motivo_parts),
                 "cluster": cand["cluster_id"],
                 "score": cand["score_100"],
-                "classe_med": cand["cluster_classe_med"],
-                "poi_med": cand["cluster_poi_med"],
-                "tipo_comercial": cand["tipo_otimo"],
-                "classe_social": cand["classe_otima"],
+                "classe_med": 0.0,
+                "poi_med": float(cand["poi_count"]),
+                "tipo_comercial": "N/A",
+                "classe_social": "N/A",
             })
 
-        print(f"\n✓ {len(regioes)} pontos candidatos em {n_total_clusters} zonas ({CANDIDATOS_POR_CLUSTER} por zona)")
-
-        # Análise de mercado nas top-N regiões (apenas se API ativa)
-        if usar_api and API_KEY and regioes:
-            try:
-                from market_analysis import analyze_top_regions
-                cache_market = load_cache()
-                sess_market = create_session_with_retry()
-                regioes = analyze_top_regions(
-                    regioes,
-                    nicho=nicho,
-                    cache_df=cache_market,
-                    session=sess_market,
-                    nearby_count_fn=nearby_count,
-                    hkey_fn=hkey,
-                    save_cache_fn=save_cache,
-                    nearby_names_fn=nearby_names,
-                )
-                analisadas = sum(1 for r in regioes if r.get("analise_mercado"))
-                print(f"📊 Análise de mercado aplicada em {analisadas} regiões top")
-            except Exception as exc:
-                print(f"⚠️ Falha na análise de mercado: {exc}")
-
-        # Armazena métricas para acesso pela API via gerar_regioes_ideais_com_metricas()
         _last_clustering_metrics.update(_metricas_finais)
-
+        print(f"\n✓ {len(regioes)} pontos candidatos em {n_total_clusters} zonas "
+              f"({CANDIDATOS_POR_CLUSTER} por zona)")
         return regioes
+
     except Exception as e:
         print(f"❌ Erro em gerar_regioes_ideais: {str(e)}")
         import traceback
