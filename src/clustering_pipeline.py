@@ -101,6 +101,62 @@ _PLACES_V1_FIELD_MASK_NAMES = (
     "places.id,places.displayName,places.businessStatus,"
     "places.userRatingCount,places.rating"
 )
+_GEOCODING_URL = "https://maps.googleapis.com/maps/api/geocode/json"
+
+# Cache em memória de reverse geocoding (por sessão — evita chamadas repetidas)
+_geocode_cache: dict[str, str] = {}
+
+
+def reverse_geocode_bairro(lat: float, lon: float, session: requests.Session) -> str:
+    """
+    Usa a Google Geocoding API para obter o nome do bairro (sublocality_level_1
+    ou neighborhood) a partir de coordenadas.
+
+    Retorna o nome do bairro em pt-BR, ou 'Fortaleza' como fallback.
+    Usa cache em memória para evitar chamadas duplicadas na mesma sessão.
+    """
+    if not API_KEY:
+        return "Fortaleza"
+
+    cache_key = f"{round(lat, 4)}|{round(lon, 4)}"
+    if cache_key in _geocode_cache:
+        return _geocode_cache[cache_key]
+
+    try:
+        r = session.get(
+            _GEOCODING_URL,
+            params={
+                "latlng": f"{lat},{lon}",
+                "key": API_KEY,
+                "language": "pt-BR",
+                "result_type": "sublocality|neighborhood",
+            },
+            timeout=4,
+        )
+        r.raise_for_status()
+        data = r.json()
+
+        bairro = "Fortaleza"
+        if data.get("status") == "OK" and data.get("results"):
+            # Percorre componentes do primeiro resultado buscando bairro
+            for component in data["results"][0].get("address_components", []):
+                types = component.get("types", [])
+                if "sublocality_level_1" in types or "neighborhood" in types:
+                    bairro = component["long_name"]
+                    break
+            # Fallback: usa locality (cidade) se não achou bairro
+            if bairro == "Fortaleza":
+                for component in data["results"][0].get("address_components", []):
+                    if "administrative_area_level_4" in component.get("types", []):
+                        bairro = component["long_name"]
+                        break
+
+        _geocode_cache[cache_key] = bairro
+        return bairro
+
+    except Exception as e:
+        print(f"⚠️  Reverse geocoding falhou ({lat:.4f},{lon:.4f}): {e}")
+        return "Fortaleza"
 
 
 def _places_v1_request(
@@ -788,91 +844,104 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
         top_clusters = ranking["cluster"].tolist()
         n_total_clusters = len(top_clusters)
         regioes = []
-        pontos_por_cluster = 10
 
         # Verifica se existem dados de POI reais
         poi_norm_check = [c for c in df_feat.columns if c.startswith("poi_") and c.endswith("_norm")]
         tem_poi_real = any(float(df_feat[c].sum()) > 0 for c in poi_norm_check) if poi_norm_check else False
         peso_poi, peso_classe = get_pesos_score_por_nicho(nicho)
 
+        # Traduções de nomes técnicos de POI para exibição
+        traducoes_poi = {
+            "gym": "Academias", "office": "Escritórios", "university": "Universidades",
+            "supermarket": "Supermercados", "school": "Escolas", "park": "Parques",
+            "health": "Saúde", "beauty": "Beleza", "pet": "Pet shops",
+            "electronics": "Eletrônicos", "pharmacy": "Farmácias", "restaurant": "Restaurantes",
+            "dental": "Clínicas dentárias", "lab": "Laboratórios", "sports": "Esportes",
+            "library": "Bibliotecas", "stationery": "Papelarias", "shopping": "Shoppings",
+            "childcare": "Creches",
+        }
+
         for cluster_id in top_clusters:
             subset = df_feat[labels == cluster_id]
             cluster_info = ranking[ranking["cluster"] == cluster_id].iloc[0]
-            for _, row in subset.head(pontos_por_cluster).iterrows():
-                # Motivo: POIs relevantes e classe média
-                poi_cols = [c for c in row.index if c.startswith("poi_") and c.endswith("m") and not c.endswith("_norm")]
-                pois_relevantes = {}
-                
-                for c in poi_cols:
-                    try:
-                        valor = int(float(row[c]))
-                        if valor > 0:
-                            # Remove prefixo 'poi_' e sufixo com raio, deixa só o tipo
-                            nome_limpo = c.replace("poi_", "").rsplit("_", 1)[0]
-                            # Traduz nomes técnicos para nomes amigáveis
-                            traducoes = {
-                                "gym": "Academias",
-                                "office": "Escritórios",
-                                "university": "Universidades",
-                                "supermarket": "Supermercados",
-                                "school": "Escolas",
-                                "park": "Parques",
-                                "health": "Saúde",
-                                "beauty": "Beleza",
-                                "pet": "Pet shops",
-                                "electronics": "Eletrônicos"
-                            }
-                            nome_exibir = traducoes.get(nome_limpo, nome_limpo.title())
-                            if nome_exibir not in pois_relevantes:
-                                pois_relevantes[nome_exibir] = 0
-                            pois_relevantes[nome_exibir] += valor
-                    except (ValueError, TypeError):
-                        continue
-                
-                # Monta o motivo
-                motivo_parts = []
-                motivo_parts.append(f"🏆 Cluster rank #{int(cluster_info['ordem'])}")
-                motivo_parts.append(f"👥 Classe média: {cluster_info['classe_med']:.1f}/5.0")
-                motivo_parts.append(f"⭐ Score potencial: {cluster_info['score_potencial']:.2f}")
-                
-                if pois_relevantes:
-                    top_pois = sorted(pois_relevantes.items(), key=lambda x: x[1], reverse=True)[:3]
-                    pois_str = ", ".join([f"{nome} ({qtd})" for nome, qtd in top_pois])
-                    motivo_parts.append(f"📍 POIs próximos: {pois_str}")
+
+            # ── Ponto ótimo: mediana geográfica do cluster ──────────────────
+            # A mediana é mais robusta que a média pois ignora outliers de
+            # coordenadas (endereços incorretos no cadastro).
+            lat_otimo = float(subset["lat"].median())
+            lon_otimo = float(subset["lon"].median())
+
+            # Bairro real via reverse geocoding (Google Geocoding API)
+            # Se API não disponível, tenta coluna do Excel como fallback
+            if API_KEY:
+                sess_geo = create_session_with_retry()
+                bairro_otimo = reverse_geocode_bairro(lat_otimo, lon_otimo, sess_geo)
+            else:
+                bairro_col = "bairro" if "bairro" in subset.columns else None
+                if bairro_col and not subset[bairro_col].mode().empty:
+                    bairro_otimo = subset[bairro_col].mode().iloc[0]
                 else:
-                    motivo_parts.append("📍 POIs: Dados não disponíveis (API não consultada)")
-                
-                motivo = " | ".join(motivo_parts)
+                    bairro_otimo = "Fortaleza"
 
-                # --------------------------------------------------------
-                # Score por linha: usa classe e POI REAIS do registro,
-                # não a média do cluster. Normalizado para [0, 100].
-                # --------------------------------------------------------
-                row_classe = float(row.get("classe_ord", 3))
-                poi_norm_row_cols = [c for c in row.index if c.startswith("poi_") and c.endswith("_norm")]
-                row_poi = float(np.mean([row[c] for c in poi_norm_row_cols])) if poi_norm_row_cols else 0.0
+            # Tipo comercial predominante no cluster
+            tipo_col = "tipo_comercial" if "tipo_comercial" in subset.columns else None
+            tipo_otimo = subset[tipo_col].mode().iloc[0] if tipo_col and not subset[tipo_col].mode().empty else "N/A"
 
-                if tem_poi_real and row_poi > 0.001:
-                    row_score_raw = peso_poi * row_poi + peso_classe * (row_classe / 5.0)
-                else:
-                    # Sem POIs: classe (70%) + rank do cluster (30%)
-                    rank_bonus = (n_total_clusters - int(cluster_info["ordem"]) + 1) / n_total_clusters
-                    row_score_raw = 0.70 * (row_classe / 5.0) + 0.30 * rank_bonus
+            # Classe social predominante no cluster
+            classe_col = "classe" if "classe" in subset.columns else None
+            classe_otima = subset[classe_col].mode().iloc[0] if classe_col and not subset[classe_col].mode().empty else "C"
 
-                row_score_100 = round(min(max(row_score_raw * 100, 0.0), 100.0), 1)
+            # ── POIs relevantes: mediana dos valores brutos do cluster ──────
+            poi_cols_brutos = [c for c in subset.columns if c.startswith("poi_") and c.endswith("m") and not c.endswith("_norm")]
+            pois_relevantes = {}
+            for c in poi_cols_brutos:
+                try:
+                    valor = int(float(subset[c].median()))
+                    if valor > 0:
+                        nome_limpo = c.replace("poi_", "").rsplit("_", 1)[0]
+                        nome_exibir = traducoes_poi.get(nome_limpo, nome_limpo.title())
+                        pois_relevantes[nome_exibir] = pois_relevantes.get(nome_exibir, 0) + valor
+                except (ValueError, TypeError):
+                    continue
 
-                regioes.append({
-                    "lat": float(row["lat"]),
-                    "lon": float(row["lon"]),
-                    "nome": f"{row.get('bairro', 'Desconhecido')} - {row.get('nome', 'Cliente')} (Cluster {cluster_id+1})",
-                    "motivo": motivo,
-                    "cluster": int(cluster_id),
-                    "score": row_score_100,
-                    "classe_med": float(cluster_info["classe_med"]),
-                    "poi_med": float(cluster_info["poi_med"]),
-                    "tipo_comercial": row.get("tipo_comercial", "N/A"),
-                    "classe_social": row.get("classe", "N/A"),
-                })
+            # ── Score do ponto ótimo ────────────────────────────────────────
+            poi_norm_cols = [c for c in subset.columns if c.startswith("poi_") and c.endswith("_norm")]
+            cluster_poi_med = float(subset[poi_norm_cols].mean().mean()) if poi_norm_cols else 0.0
+            cluster_classe_med = float(subset["classe_ord"].mean()) if "classe_ord" in subset.columns else 3.0
+
+            if tem_poi_real and cluster_poi_med > 0.001:
+                score_raw = peso_poi * cluster_poi_med + peso_classe * (cluster_classe_med / 5.0)
+            else:
+                rank_bonus = (n_total_clusters - int(cluster_info["ordem"]) + 1) / n_total_clusters
+                score_raw = 0.70 * (cluster_classe_med / 5.0) + 0.30 * rank_bonus
+
+            score_100 = round(min(max(score_raw * 100, 0.0), 100.0), 1)
+
+            # ── Motivo ──────────────────────────────────────────────────────
+            motivo_parts = [
+                f"🏆 Cluster rank #{int(cluster_info['ordem'])} de {n_total_clusters}",
+                f"👥 Classe média: {cluster_classe_med:.1f}/5.0 ({len(subset)} clientes na região)",
+                f"⭐ Score potencial: {score_100:.1f}/100",
+            ]
+            if pois_relevantes:
+                top_pois = sorted(pois_relevantes.items(), key=lambda x: x[1], reverse=True)[:3]
+                pois_str = ", ".join([f"{nome} ({qtd})" for nome, qtd in top_pois])
+                motivo_parts.append(f"📍 POIs próximos: {pois_str}")
+            else:
+                motivo_parts.append("📍 POIs: consulte com a API ativada para ver estabelecimentos próximos")
+
+            regioes.append({
+                "lat": lat_otimo,
+                "lon": lon_otimo,
+                "nome": f"{bairro_otimo} — Ponto ótimo #{int(cluster_info['ordem'])}",
+                "motivo": " | ".join(motivo_parts),
+                "cluster": int(cluster_id),
+                "score": score_100,
+                "classe_med": cluster_classe_med,
+                "poi_med": float(cluster_info["poi_med"]),
+                "tipo_comercial": tipo_otimo,
+                "classe_social": classe_otima,
+            })
         print(f"\n✓ {len(regioes)} regiões ideais identificadas")
 
         # Análise de mercado nas top-N regiões (apenas se API ativa)
