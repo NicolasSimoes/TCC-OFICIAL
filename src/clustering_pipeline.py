@@ -661,18 +661,20 @@ _last_grid_data: list = []  # Armazena todos os 50 pontos da grade com scores pa
 # Os pontos foram escolhidos para cobrir tanto o litoral (bairros nobres)
 # quanto o interior (bairros populares com alto volume comercial).
 _FTZ_GRID_PONTOS = [
-    # Litoral Leste / Zona Nobre (expandido)
-    (-3.7200, -38.5010),  # Meireles / Iracema
-    (-3.7240, -38.4850),  # Mucuripe / Coco
-    (-3.7320, -38.4920),  # Meireles centro
-    (-3.7400, -38.5020),  # Aldeota
-    (-3.7440, -38.4860),  # Papicu
-    (-3.7380, -38.4950),  # Dionísio Torres
-    (-3.7500, -38.4920),  # Cocó
-    (-3.7560, -38.4750),  # Edson Queiroz
-    (-3.7680, -38.4730),  # Salinas
-    (-3.7620, -38.4650),  # Manoel Dias Branco
-    # Centro Expandido (mais pontos)
+    # Litoral Leste / Zona Nobre (ajustado para evitar oceano)
+    (-3.7200, -38.5100),  # Meireles / Iracema (mais para oeste)
+    (-3.7240, -38.4980),  # Mucuripe / Coco (ajustado)
+    (-3.7320, -38.5020),  # Meireles centro (ajustado)
+    (-3.7400, -38.5080),  # Aldeota
+    (-3.7440, -38.4980),  # Papicu (mais interior)
+    (-3.7380, -38.5050),  # Dionísio Torres
+    (-3.7500, -38.5020),  # Cocó
+    (-3.7560, -38.4880),  # Edson Queiroz (ajustado)
+    (-3.7680, -38.4850),  # Salinas (mais interior)
+    (-3.7620, -38.4780),  # Manoel Dias Branco (ajustado)
+    (-3.7300, -38.5080),  # Varjota / Aldeota
+    (-3.7350, -38.4980),  # Cocó / Praia do Futuro
+    # Centro Expandido (expandido)
     (-3.7200, -38.5430),  # Centro
     (-3.7280, -38.5350),  # Jacarecanga
     (-3.7350, -38.5300),  # Benfica / São Gerardo
@@ -684,18 +686,31 @@ _FTZ_GRID_PONTOS = [
     (-3.7450, -38.5600),  # Antônio Bezerra / Otávio Bonfim
     (-3.7300, -38.5700),  # Barra do Ceará / Cristo Redentor
     (-3.7400, -38.5500),  # Carlito Pamplona
+    (-3.7150, -38.5320),  # Centro histórico
+    (-3.7380, -38.5400),  # José Bonifácio
+    (-3.7250, -38.5250),  # Jacarecanga / Moura Brasil
+    (-3.7500, -38.5350),  # Parreão
+    (-3.7420, -38.5280),  # Dionísio Torres / Joaquim Távora
+    (-3.7580, -38.5280),  # Parquelândia / Rodolfo Teófilo
     # Zona Sul / Interior (expandido)
     (-3.7850, -38.5100),  # Maraponga / Canindezinho
     (-3.7900, -38.5400),  # Parangaba / Mondubim
     (-3.7750, -38.5250),  # Itaperi
     (-3.7950, -38.5200),  # Vila Peri
     (-3.8050, -38.5600),  # Conjunto Ceará
-    (-3.8150, -38.4950),  # Messejana
-    (-3.8050, -38.4850),  # Ancuri
-    (-3.7960, -38.4850),  # Alagadiço / Dendê
+    (-3.8150, -38.5050),  # Messejana (ajustado)
+    (-3.8050, -38.4980),  # Ancuri (mais interior)
+    (-3.7960, -38.4950),  # Alagadiço / Dendê (ajustado)
     (-3.8000, -38.5200),  # José Walter
     (-3.8200, -38.5150),  # Curió / Coaçu
     (-3.8100, -38.5550),  # Passaré
+    (-3.8250, -38.5300),  # Cambeba / Eusébio
+    (-3.8050, -38.5350),  # Parque Dois Irmãos
+    (-3.7850, -38.5350),  # Cidade dos Funcionários
+    (-3.7900, -38.5150),  # Dias Macedo
+    (-3.8200, -38.5450),  # Pedras / Ancuri
+    (-3.7800, -38.5200),  # Itaperi / Parangaba
+    (-3.8150, -38.5350),  # Lagoa Redonda
     # Zona Oeste (expandido)
     (-3.7500, -38.5900),  # Autran Nunes / Henrique Jorge
     (-3.7550, -38.5750),  # João XXIII
@@ -705,18 +720,34 @@ _FTZ_GRID_PONTOS = [
     (-3.7750, -38.6000),  # Canindezinho oeste
     (-3.7850, -38.5950),  # Araturi / Novo Mondubim
     (-3.7800, -38.5800),  # Genibau
-    # Zona Leste / Praia do Futuro
-    (-3.7550, -38.4550),  # Praia do Futuro
-    (-3.7650, -38.4600),  # Praia do Futuro II
-    (-3.7800, -38.4700),  # Sabiaguaba
-    (-3.7700, -38.4580),  # Caça e Pesca
+    (-3.7350, -38.5800),  # Jacarecanga oeste
+    (-3.7450, -38.5950),  # Presidente Kennedy
+    (-3.7550, -38.6050),  # Bom Jardim centro
+    (-3.7700, -38.5850),  # Granja Portugal / Quintino Cunha
+    (-3.7900, -38.5850),  # Mondubim / Manoel Sátiro
+    (-3.7650, -38.5650),  # João XXIII / Parque Iracema
+    (-3.7350, -38.5600),  # Álvaro Weyne
+    # Zona Leste / Praia do Futuro (ajustado para evitar oceano)
+    (-3.7550, -38.4720),  # Praia do Futuro (mais interior)
+    (-3.7650, -38.4780),  # Praia do Futuro II (ajustado)
+    (-3.7800, -38.4850),  # Sabiaguaba (mais interior)
+    (-3.7700, -38.4720),  # Caça e Pesca (ajustado)
+    (-3.7480, -38.4850),  # Papicu / Edson Queiroz
+    (-3.7590, -38.4650),  # Praia do Futuro / Dunas (ajustado)
     # Pontos intermediários para melhor cobertura
     (-3.7650, -38.5150),  # Amadeu Furtado / Joaquim Távora
     (-3.7300, -38.5150),  # Varjota / Dionísio Torres
-    (-3.7100, -38.5250),  # Pirambu / Moura Brasil
+    (-3.7100, -38.5350),  # Pirambu / Moura Brasil (ajustado)
     (-3.7950, -38.5750),  # Bom Sucesso / Prefeito José Walter
     (-3.7600, -38.5350),  # Parreão / João XXIII
     (-3.8100, -38.5350),  # Guajeru / Planalto Ayrton Senna
+    (-3.7280, -38.5450),  # Fátima / São Gerardo
+    (-3.7520, -38.5150),  # Amadeu Furtado
+    (-3.7820, -38.5350),  # Parangaba / Maraponga
+    (-3.7400, -38.5350),  # Benfica / Parreão
+    (-3.7150, -38.5500),  # Pirambu
+    (-3.7900, -38.5550),  # Mondubim / Conjunto Ceará
+    (-3.8000, -38.5450),  # Parangaba sul / Serrinha
 ]
 
 
@@ -724,14 +755,14 @@ def buscar_grid_fortaleza(nicho: str, session: requests.Session) -> pd.DataFrame
     """
     Mapeia os principais bairros de Fortaleza via Google Places API v1.
 
-    Para cada um dos 50 pontos estratégicos da grade, conta quantos POIs do
+    Para cada um dos 80+ pontos estratégicos da grade, conta quantos POIs do
     nicho existem num raio de 800 m (Calthorpe 1993 — ~10 min a pé).
 
     A densidade de POIs funciona como proxy da demanda/fluxo local:
     onde há muitos estabelecimentos congêneres, há público-alvo.
 
-    Retorna DataFrame com colunas [lat, lon, poi_count] para TODOS os 50
-    pontos (incluindo os com poi_count=0, para usar no heatmap).
+    Retorna DataFrame com colunas [lat, lon, poi_count] para TODOS os pontos
+    (incluindo os com poi_count=0, para usar no heatmap).
     """
     if not API_KEY:
         print("❌ GOOGLE_API_KEY não configurada — busca em grade requer a API")
