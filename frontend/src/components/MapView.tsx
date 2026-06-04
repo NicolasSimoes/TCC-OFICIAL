@@ -210,54 +210,77 @@ export function MapView({ regions, focusRegion, onRegionClick, gridPoints }: Map
               }}
             >
               <Popup>
-                <div className="min-w-[200px] space-y-2">
+                <div className="min-w-[240px] space-y-2">
                   <div className="flex items-center justify-between">
-                    <h3 className="font-semibold text-foreground">
+                    <h3 className="font-semibold text-gray-900">
                       {region.name.split(' - ')[0]}
                     </h3>
                     {isTop3 && (
-                      <Star className="h-4 w-4 text-yellow-400 fill-yellow-400" />
+                      <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
                     )}
                   </div>
                   
                   <div className="flex items-center gap-2">
                     <span
-                      className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
-                      style={{ backgroundColor: `${color}20`, color }}
+                      className="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold text-white"
+                      style={{ backgroundColor: color }}
                     >
                       Score: {region.score.toFixed(1)}
                     </span>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-xs font-medium text-gray-700">
                       ({getScoreColorName(region.score)})
                     </span>
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div>
-                      <span className="text-muted-foreground">Potencial:</span>
-                      <span className="ml-1 font-medium text-primary">
+                      <span className="text-gray-600">Potencial:</span>
+                      <span className="ml-1 font-bold text-blue-600">
                         {region.potential.toFixed(0)}%
                       </span>
                     </div>
                     <div>
-                      <span className="text-muted-foreground">Classe:</span>
-                      <span className="ml-1 font-medium">{region.socialClass}</span>
+                      <span className="text-gray-600">Classe:</span>
+                      <span className="ml-1 font-bold text-gray-900">{region.socialClass}</span>
                     </div>
                     <div>
-                      <span className="text-muted-foreground">Tipo:</span>
-                      <span className="ml-1 font-medium">{region.commercialType}</span>
+                      <span className="text-gray-600">Tipo:</span>
+                      <span className="ml-1 font-bold text-gray-900">{region.commercialType}</span>
                     </div>
                     <div>
-                      <span className="text-muted-foreground">POIs:</span>
-                      <span className="ml-1 font-medium">{region.pois}</span>
+                      <span className="text-gray-600">POIs:</span>
+                      <span className="ml-1 font-bold text-gray-900">{region.pois}</span>
                     </div>
                   </div>
 
-                  <div className="pt-2 border-t text-xs text-muted-foreground">
-                    <span>Pop: {region.population.toLocaleString()}</span>
-                    <span className="mx-2">•</span>
-                    <span>Concorrentes: {region.competitors}</span>
-                  </div>
+                  {region.marketAnalysis && (
+                    <div className="pt-2 border-t border-gray-200">
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                          <span className="text-gray-600">Concorrentes:</span>
+                          <span className="ml-1 font-bold text-red-600">{region.marketAnalysis.competitors}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Sinergias:</span>
+                          <span className="ml-1 font-bold text-green-600">{region.marketAnalysis.synergies}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Âncoras:</span>
+                          <span className="ml-1 font-bold text-purple-600">{region.marketAnalysis.anchors}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-600">Saturação:</span>
+                          <span className="ml-1 font-bold text-orange-600 capitalize">{region.marketAnalysis.saturacao}</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {!region.marketAnalysis && region.competitors === 0 && (
+                    <div className="pt-2 border-t border-gray-200 text-xs text-gray-500 italic">
+                      Análise detalhada disponível para as top regiões
+                    </div>
+                  )}
                 </div>
               </Popup>
             </CircleMarker>

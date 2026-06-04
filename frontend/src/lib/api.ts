@@ -202,8 +202,8 @@ function buildStrategyFromText(product: string, niche: string, regions: Region[]
     recommendations: [
       `Priorizar atuação em ${top[0] || 'cluster top 1'}`,
       `Validar com pesquisa de campo nas 3 zonas de maior score`,
-      `Considerar enriquecer dados com Google Places API para refinar score`,
-      `Avaliar parcerias e modelos de canal local`,
+      `Avaliar saturação de mercado antes da implantação`,
+      `Estabelecer parcerias estratégicas com estabelecimentos complementares`,
     ],
     nextSteps: [
       `Semana 1-2: Pesquisa de campo nas regiões prioritárias`,

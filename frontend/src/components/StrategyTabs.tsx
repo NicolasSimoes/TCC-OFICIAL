@@ -4,7 +4,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion';
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend } from 'recharts';
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid } from 'recharts';
 import { Region, Strategy, Demographics } from '@/types';
 import { motion } from 'framer-motion';
 import { cn } from '@/lib/utils';
@@ -180,23 +180,30 @@ function StrategyTab({ strategy }: { strategy: Strategy }) {
 // Tab: Análise Demográfica
 function DemographicsTab({ demographics }: { demographics: Demographics }) {
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div className="space-y-6">
       {/* Pie Chart - Classes Sociais */}
-      <Card className="p-4">
-        <h3 className="font-semibold mb-4">Distribuição por Classe Social</h3>
-        <div className="h-[250px]">
+      <Card className="p-6">
+        <h3 className="font-semibold text-lg mb-6">Distribuição por Classe Social</h3>
+        <div className="h-[300px]">
           <ResponsiveContainer width="100%" height="100%">
             <PieChart>
               <Pie
                 data={demographics.socialClasses}
                 cx="50%"
                 cy="50%"
-                innerRadius={60}
-                outerRadius={90}
-                paddingAngle={2}
+                innerRadius={70}
+                outerRadius={110}
+                paddingAngle={3}
                 dataKey="value"
-                label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
-                labelLine={false}
+                label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                labelLine={{
+                  stroke: 'hsl(215 20% 65%)',
+                  strokeWidth: 1,
+                }}
+                style={{
+                  fontSize: '14px',
+                  fontWeight: 600,
+                }}
               >
                 {demographics.socialClasses.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={entry.fill} />
@@ -204,41 +211,62 @@ function DemographicsTab({ demographics }: { demographics: Demographics }) {
               </Pie>
               <Tooltip
                 contentStyle={{
-                  backgroundColor: 'hsl(217 33% 17%)',
-                  border: '1px solid hsl(217 33% 26%)',
+                  backgroundColor: 'white',
+                  border: '1px solid hsl(217 33% 80%)',
                   borderRadius: '8px',
-                  color: 'hsl(210 40% 98%)',
+                  color: 'hsl(217 33% 17%)',
+                  padding: '12px',
                 }}
+                formatter={(value: number) => [`${value} regiões`, 'Quantidade']}
               />
-              <Legend />
+              <Legend 
+                wrapperStyle={{
+                  paddingTop: '20px',
+                  fontSize: '14px',
+                }}
+                iconType="circle"
+              />
             </PieChart>
           </ResponsiveContainer>
         </div>
       </Card>
 
       {/* Bar Chart - Tipos Comerciais */}
-      <Card className="p-4">
-        <h3 className="font-semibold mb-4">Distribuição por Tipo Comercial</h3>
-        <div className="h-[250px]">
+      <Card className="p-6">
+        <h3 className="font-semibold text-lg mb-6">Distribuição por Tipo Comercial</h3>
+        <div className="h-[350px]">
           <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={demographics.commercialTypes} layout="vertical">
-              <XAxis type="number" stroke="hsl(215 20% 65%)" fontSize={12} />
+            <BarChart 
+              data={demographics.commercialTypes} 
+              layout="vertical"
+              margin={{ top: 5, right: 30, left: 100, bottom: 5 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="hsl(217 33% 90%)" />
+              <XAxis 
+                type="number" 
+                stroke="hsl(215 20% 45%)" 
+                fontSize={13}
+                fontWeight={500}
+              />
               <YAxis
                 type="category"
                 dataKey="name"
-                stroke="hsl(215 20% 65%)"
-                fontSize={12}
-                width={80}
+                stroke="hsl(215 20% 45%)"
+                fontSize={13}
+                fontWeight={500}
+                width={100}
               />
               <Tooltip
                 contentStyle={{
-                  backgroundColor: 'hsl(217 33% 17%)',
-                  border: '1px solid hsl(217 33% 26%)',
+                  backgroundColor: 'white',
+                  border: '1px solid hsl(217 33% 80%)',
                   borderRadius: '8px',
-                  color: 'hsl(210 40% 98%)',
+                  color: 'hsl(217 33% 17%)',
+                  padding: '12px',
                 }}
+                formatter={(value: number) => [`${value} regiões`, 'Quantidade']}
               />
-              <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+              <Bar dataKey="count" radius={[0, 6, 6, 0]}>
                 {demographics.commercialTypes.map((entry, index) => (
                   <Cell key={`cell-${index}`} fill={entry.fill} />
                 ))}

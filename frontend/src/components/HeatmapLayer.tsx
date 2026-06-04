@@ -22,13 +22,13 @@ export function HeatmapLayer({ points, options = {} }: HeatmapLayerProps) {
     if (!points || points.length === 0) return;
 
     const defaultOptions = {
-      radius: 18,       // Reduzido de 25 para 18 (menos interpolação)
-      blur: 20,         // Reduzido de 35 para 20 (bordas mais definidas)
+      radius: 15,       // Reduzido de 18 para 15 (menos vazamento)
+      blur: 15,         // Reduzido de 20 para 15 (bordas mais definidas)
       maxZoom: 17,
-      max: 0.6,         // Reduzido de 1.0 para 0.6 (cores mais intensas)
-      minOpacity: 0.5,  // Aumentado de 0.4 para 0.5 (mais visível)
+      max: 0.5,         // Reduzido de 0.6 para 0.5 (cores mais intensas)
+      minOpacity: 0.6,  // Aumentado de 0.5 para 0.6 (mais visível)
       gradient: {
-        0.0: 'blue',
+        0.0: 'rgba(0, 0, 255, 0)',      // Azul transparente
         0.2: 'cyan',
         0.4: 'lime',
         0.6: 'yellow',
