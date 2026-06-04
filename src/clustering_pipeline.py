@@ -651,46 +651,66 @@ def rank_clusters(df_feat: pd.DataFrame, labels: np.ndarray, nicho: str = "Outro
 
 # Armazena métricas da última execução para acesso pela API
 _last_clustering_metrics: Dict = {}
-_last_grid_data: list = []  # Armazena todos os 30 pontos da grade com scores para heatmap
+_last_grid_data: list = []  # Armazena todos os 50 pontos da grade com scores para heatmap
 
 # =========================
 # GRID FORTALEZA (Places API)
 # =========================
-# 30 pontos estratégicos cobrindo os principais bairros de Fortaleza.
+# 50 pontos estratégicos cobrindo os principais bairros de Fortaleza.
 # Grid fixo (passo ~3 km) garante resposta em <15s com 20 workers paralelos.
 # Os pontos foram escolhidos para cobrir tanto o litoral (bairros nobres)
 # quanto o interior (bairros populares com alto volume comercial).
 _FTZ_GRID_PONTOS = [
-    # Litoral Leste / Zona Nobre
+    # Litoral Leste / Zona Nobre (expandido)
     (-3.7200, -38.5010),  # Meireles / Iracema
     (-3.7240, -38.4850),  # Mucuripe / Coco
+    (-3.7320, -38.4920),  # Meireles centro
     (-3.7400, -38.5020),  # Aldeota
     (-3.7440, -38.4860),  # Papicu
+    (-3.7380, -38.4950),  # Dionísio Torres
+    (-3.7500, -38.4920),  # Cocó
     (-3.7560, -38.4750),  # Edson Queiroz
     (-3.7680, -38.4730),  # Salinas
-    # Centro Expandido
+    (-3.7620, -38.4650),  # Manoel Dias Branco
+    # Centro Expandido (mais pontos)
     (-3.7200, -38.5430),  # Centro
+    (-3.7280, -38.5350),  # Jacarecanga
     (-3.7350, -38.5300),  # Benfica / São Gerardo
+    (-3.7450, -38.5200),  # Joaquim Távora
     (-3.7550, -38.5450),  # Fátima / Damas
+    (-3.7620, -38.5400),  # Parangaba norte
     (-3.7680, -38.5300),  # Jóquei Clube / Montese
+    (-3.7750, -38.5450),  # Couto Fernandes
     (-3.7450, -38.5600),  # Antônio Bezerra / Otávio Bonfim
     (-3.7300, -38.5700),  # Barra do Ceará / Cristo Redentor
-    # Zona Sul / Interior
+    (-3.7400, -38.5500),  # Carlito Pamplona
+    # Zona Sul / Interior (expandido)
     (-3.7850, -38.5100),  # Maraponga / Canindezinho
     (-3.7900, -38.5400),  # Parangaba / Mondubim
+    (-3.7750, -38.5250),  # Itaperi
+    (-3.7950, -38.5200),  # Vila Peri
     (-3.8050, -38.5600),  # Conjunto Ceará
     (-3.8150, -38.4950),  # Messejana
+    (-3.8050, -38.4850),  # Ancuri
     (-3.7960, -38.4850),  # Alagadiço / Dendê
     (-3.8000, -38.5200),  # José Walter
-    # Zona Oeste
+    (-3.8200, -38.5150),  # Curió / Coaçu
+    (-3.8100, -38.5550),  # Passaré
+    # Zona Oeste (expandido)
     (-3.7500, -38.5900),  # Autran Nunes / Henrique Jorge
+    (-3.7550, -38.5750),  # João XXIII
     (-3.7700, -38.5700),  # Granja Lisboa / Granja Portugal
+    (-3.7650, -38.5850),  # Quintino Cunha
     (-3.7600, -38.6100),  # Bom Jardim / Siqueira
+    (-3.7750, -38.6000),  # Canindezinho oeste
     (-3.7850, -38.5950),  # Araturi / Novo Mondubim
+    (-3.7800, -38.5800),  # Genibau
     # Zona Leste / Praia do Futuro
     (-3.7550, -38.4550),  # Praia do Futuro
+    (-3.7650, -38.4600),  # Praia do Futuro II
     (-3.7800, -38.4700),  # Sabiaguaba
-    # Pontos extras para melhor cobertura
+    (-3.7700, -38.4580),  # Caça e Pesca
+    # Pontos intermediários para melhor cobertura
     (-3.7650, -38.5150),  # Amadeu Furtado / Joaquim Távora
     (-3.7300, -38.5150),  # Varjota / Dionísio Torres
     (-3.7100, -38.5250),  # Pirambu / Moura Brasil
@@ -704,13 +724,13 @@ def buscar_grid_fortaleza(nicho: str, session: requests.Session) -> pd.DataFrame
     """
     Mapeia os principais bairros de Fortaleza via Google Places API v1.
 
-    Para cada um dos 30 pontos estratégicos da grade, conta quantos POIs do
+    Para cada um dos 50 pontos estratégicos da grade, conta quantos POIs do
     nicho existem num raio de 800 m (Calthorpe 1993 — ~10 min a pé).
 
     A densidade de POIs funciona como proxy da demanda/fluxo local:
     onde há muitos estabelecimentos congêneres, há público-alvo.
 
-    Retorna DataFrame com colunas [lat, lon, poi_count] para TODOS os 30
+    Retorna DataFrame com colunas [lat, lon, poi_count] para TODOS os 50
     pontos (incluindo os com poi_count=0, para usar no heatmap).
     """
     if not API_KEY:
@@ -739,7 +759,7 @@ def buscar_grid_fortaleza(nicho: str, session: requests.Session) -> pd.DataFrame
             print(f"  ⚠ ({lat:.4f},{lon:.4f}) erro: {exc}")
             return {"lat": lat, "lon": lon, "poi_count": 0}
 
-    # 20 workers para 30 pontos → ~2 rodadas de chamadas paralelas (~6–10s)
+    # 20 workers para 50 pontos → ~3 rodadas de chamadas paralelas (~8–12s)
     with ThreadPoolExecutor(max_workers=20) as pool:
         resultados = list(pool.map(_fetch, _FTZ_GRID_PONTOS))
 
@@ -755,7 +775,7 @@ def gerar_regioes_ideais_com_metricas(produto: str, filtros: dict, nicho: str = 
     """
     Versão estendida de gerar_regioes_ideais() que também retorna
     as métricas de clustering (Silhouette, Davies-Bouldin, Elbow, comparação)
-    e todos os 30 pontos da grade com scores para heatmap.
+    e todos os 50 pontos da grade com scores para heatmap.
 
     Returns:
         (regioes, metricas, grid_points)
@@ -791,10 +811,10 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
 
         sess = create_session_with_retry()
 
-        # ── 1. Busca POIs em grade sobre Fortaleza (todos os 30 pontos) ────
+        # ── 1. Busca POIs em grade sobre Fortaleza (todos os 50 pontos) ────
         df_grid_completa = buscar_grid_fortaleza(nicho, sess)
         
-        # ── 2. Armazena todos os 30 pontos para heatmap ─────────────────────
+        # ── 2. Armazena todos os 50 pontos para heatmap ─────────────────────
         if not df_grid_completa.empty:
             poi_max = float(df_grid_completa["poi_count"].max())
             _last_grid_data = [

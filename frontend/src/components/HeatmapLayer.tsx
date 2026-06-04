@@ -22,16 +22,17 @@ export function HeatmapLayer({ points, options = {} }: HeatmapLayerProps) {
     if (!points || points.length === 0) return;
 
     const defaultOptions = {
-      radius: 25,
-      blur: 35,
+      radius: 18,       // Reduzido de 25 para 18 (menos interpolação)
+      blur: 20,         // Reduzido de 35 para 20 (bordas mais definidas)
       maxZoom: 17,
-      max: 1.0,
-      minOpacity: 0.4,
+      max: 0.6,         // Reduzido de 1.0 para 0.6 (cores mais intensas)
+      minOpacity: 0.5,  // Aumentado de 0.4 para 0.5 (mais visível)
       gradient: {
         0.0: 'blue',
-        0.25: 'cyan',
-        0.5: 'lime',
-        0.75: 'yellow',
+        0.2: 'cyan',
+        0.4: 'lime',
+        0.6: 'yellow',
+        0.8: 'orange',
         1.0: 'red',
       },
       ...options,

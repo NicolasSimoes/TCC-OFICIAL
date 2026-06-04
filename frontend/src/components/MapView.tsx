@@ -128,8 +128,14 @@ export function MapView({ regions, focusRegion, onRegionClick, gridPoints }: Map
   const top3Ids = new Set(regions.slice(0, 3).map((r) => r.id));
 
   // Prepara dados do heatmap: [lat, lng, intensity (0-1)]
+  // Usa transformação não-linear (potência 0.5 = raiz quadrada) para amplificar diferenças
   const heatmapData: Array<[number, number, number]> = gridPoints
-    ? gridPoints.map((gp) => [gp.lat, gp.lon, gp.score / 100])
+    ? gridPoints.map((gp) => {
+        const normalized = gp.score / 100;
+        // Amplifica intensidade: raiz quadrada deixa valores médios mais visíveis
+        const amplified = Math.pow(normalized, 0.5);
+        return [gp.lat, gp.lon, amplified];
+      })
     : [];
 
   return (
