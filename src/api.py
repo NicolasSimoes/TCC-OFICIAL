@@ -344,7 +344,7 @@ def analyze_context(payload: ContextAnalyzeRequest) -> ContextAnalyzeResponse:
         analise = analisar_produto_completo(produto)
         nlp_info = identificar_nicho_com_confianca(produto)
         filtros_dict = payload.filtros.model_dump()
-        regioes, metricas_raw = gerar_regioes_ideais_com_metricas(
+        regioes, metricas_raw, grid_points = gerar_regioes_ideais_com_metricas(
             produto, filtros_dict, analise["nicho"]
         )
 
@@ -394,6 +394,7 @@ def analyze_context(payload: ContextAnalyzeRequest) -> ContextAnalyzeResponse:
             metricas_clustering=metricas,
             estrategia=estrategia_texto,
             sazonalidade=SAZONALIDADE_BY_NICHE.get(analise["nicho"], SAZONALIDADE_BY_NICHE["Outro"]),
+            grid_points=[GridPoint(**gp) for gp in grid_points] if grid_points else None,
         )
     except HTTPException:
         raise
