@@ -651,6 +651,7 @@ def rank_clusters(df_feat: pd.DataFrame, labels: np.ndarray, nicho: str = "Outro
 
 # Armazena métricas da última execução para acesso pela API
 _last_clustering_metrics: Dict = {}
+_last_grid_data: list = []  # Armazena todos os 30 pontos da grade com scores para heatmap
 
 # =========================
 # GRID FORTALEZA (Places API)
@@ -709,8 +710,8 @@ def buscar_grid_fortaleza(nicho: str, session: requests.Session) -> pd.DataFrame
     A densidade de POIs funciona como proxy da demanda/fluxo local:
     onde há muitos estabelecimentos congêneres, há público-alvo.
 
-    Retorna DataFrame com colunas [lat, lon, poi_count], apenas pontos com
-    poi_count > 0 (pontos "ativos" para o nicho).
+    Retorna DataFrame com colunas [lat, lon, poi_count] para TODOS os 30
+    pontos (incluindo os com poi_count=0, para usar no heatmap).
     """
     if not API_KEY:
         print("❌ GOOGLE_API_KEY não configurada — busca em grade requer a API")
@@ -747,20 +748,22 @@ def buscar_grid_fortaleza(nicho: str, session: requests.Session) -> pd.DataFrame
     poi_max = int(df["poi_count"].max()) if not df.empty else 0
     print(f"✓ {n_ativos} pontos ativos (de {len(_FTZ_GRID_PONTOS)}) | "
           f"máx POIs/ponto: {poi_max}")
-    return df[df["poi_count"] > 0].copy().reset_index(drop=True)
+    return df  # Retorna TODOS os pontos, sem filtrar
 
 
-def gerar_regioes_ideais_com_metricas(produto: str, filtros: dict, nicho: str = None) -> Tuple[list, Dict]:
+def gerar_regioes_ideais_com_metricas(produto: str, filtros: dict, nicho: str = None) -> Tuple[list, Dict, list]:
     """
     Versão estendida de gerar_regioes_ideais() que também retorna
-    as métricas de clustering (Silhouette, Davies-Bouldin, Elbow, comparação).
+    as métricas de clustering (Silhouette, Davies-Bouldin, Elbow, comparação)
+    e todos os 30 pontos da grade com scores para heatmap.
 
     Returns:
-        (regioes, metricas)
+        (regioes, metricas, grid_points)
     """
     regioes = gerar_regioes_ideais(produto, filtros, nicho)
     metricas = dict(_last_clustering_metrics)
-    return regioes, metricas
+    grid_points = list(_last_grid_data)
+    return regioes, metricas, grid_points
 
 
 def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list:
@@ -775,7 +778,7 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
     Retorna lista de dicts: [{lat, lon, nome, motivo, cluster, score, poi_med}]
     """
     try:
-        global _last_clustering_metrics
+        global _last_clustering_metrics, _last_grid_data
         _metricas_finais: Dict = {}
 
         from nlp import identificar_nicho
@@ -788,8 +791,26 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
 
         sess = create_session_with_retry()
 
-        # ── 1. Busca POIs em grade sobre Fortaleza ──────────────────────────
-        df_grid = buscar_grid_fortaleza(nicho, sess)
+        # ── 1. Busca POIs em grade sobre Fortaleza (todos os 30 pontos) ────
+        df_grid_completa = buscar_grid_fortaleza(nicho, sess)
+        
+        # ── 2. Armazena todos os 30 pontos para heatmap ─────────────────────
+        if not df_grid_completa.empty:
+            poi_max = float(df_grid_completa["poi_count"].max())
+            _last_grid_data = [
+                {
+                    "lat": float(row["lat"]),
+                    "lon": float(row["lon"]),
+                    "poi_count": int(row["poi_count"]),
+                    "score": round(min(100.0, (row["poi_count"] / poi_max * 100) if poi_max > 0 else 0.0), 1)
+                }
+                for _, row in df_grid_completa.iterrows()
+            ]
+        else:
+            _last_grid_data = []
+        
+        # ── 3. Filtra apenas pontos ativos (POI > 0) para clustering ───────
+        df_grid = df_grid_completa[df_grid_completa["poi_count"] > 0].copy().reset_index(drop=True)
 
         if len(df_grid) < 6:
             print(f"⚠️  Apenas {len(df_grid)} pontos com POIs retornados.")
@@ -798,7 +819,7 @@ def gerar_regioes_ideais(produto: str, filtros: dict, nicho: str = None) -> list
             print("   Verifique GOOGLE_API_KEY no Railway e habilite 'Places API (New)'.")
             return []
 
-        # ── 2. Features para clustering (coordenadas + densidade de POIs) ──
+        # ── 4. Features para clustering (coordenadas + densidade de POIs) ──
         poi_max = float(df_grid["poi_count"].max())
         df_grid["poi_norm"] = df_grid["poi_count"] / poi_max
 

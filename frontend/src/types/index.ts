@@ -37,6 +37,13 @@ export interface Region {
   marketAnalysis?: MarketAnalysis;
 }
 
+export interface GridPoint {
+  lat: number;
+  lon: number;
+  poi_count: number;
+  score: number;
+}
+
 export interface ClusteringMetrics {
   algoritmo?: string;
   justificativa?: string;
@@ -68,6 +75,8 @@ export interface AnalysisResult {
   sazonalidade?: number[];
   // Nível de investimento informado no chat guiado
   investimento?: string;
+  // Grid completo de 30 pontos para heatmap
+  gridPoints?: GridPoint[];
 }
 
 export interface ActionItem {

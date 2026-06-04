@@ -145,6 +145,7 @@ function App() {
                   regions={result.regions}
                   focusRegion={focusRegion}
                   onRegionClick={setFocusRegion}
+                  gridPoints={result.gridPoints}
                 />
               </section>
 

@@ -75,6 +75,12 @@ interface BackendAnalyzeResponse {
   total_regioes: number;
   metricas_clustering?: BackendClusteringMetrics | null;
   sazonalidade?: number[] | null;
+  grid_points?: Array<{
+    lat: number;
+    lon: number;
+    poi_count: number;
+    score: number;
+  }> | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +312,12 @@ export async function analyzeProduct(
     nlp_confianca: data.analise.nlp_confianca ?? undefined,
     nlp_metodo: data.analise.nlp_metodo ?? undefined,
     sazonalidade: data.sazonalidade ?? undefined,
+    gridPoints: data.grid_points?.map(gp => ({
+      lat: gp.lat,
+      lon: gp.lon,
+      poi_count: gp.poi_count,
+      score: gp.score,
+    })) ?? undefined,
   };
 }
 
@@ -405,6 +417,12 @@ export async function analyzeByContext(
     nlp_metodo: data.analise.nlp_metodo ?? undefined,
     sazonalidade: (data as any).sazonalidade ?? undefined,
     investimento: ctx.investimento,
+    gridPoints: data.grid_points?.map(gp => ({
+      lat: gp.lat,
+      lon: gp.lon,
+      poi_count: gp.poi_count,
+      score: gp.score,
+    })) ?? undefined,
   };
 }
 

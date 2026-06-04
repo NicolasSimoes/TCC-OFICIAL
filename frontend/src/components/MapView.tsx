@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { MapContainer, TileLayer, CircleMarker, Popup, useMap, ZoomControl } from 'react-leaflet';
 import { Maximize2, Star } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Region } from '@/types';
+import { Region, GridPoint } from '@/types';
+import { HeatmapLayer } from './HeatmapLayer';
 
 import 'leaflet/dist/leaflet.css';
 
@@ -10,6 +11,7 @@ interface MapViewProps {
   regions: Region[];
   focusRegion?: Region | null;
   onRegionClick?: (region: Region) => void;
+  gridPoints?: GridPoint[];
 }
 
 // Componente para centralizar o mapa em uma região
@@ -101,8 +103,9 @@ function MapLegend() {
   );
 }
 
-export function MapView({ regions, focusRegion, onRegionClick }: MapViewProps) {
+export function MapView({ regions, focusRegion, onRegionClick, gridPoints }: MapViewProps) {
   const mapRef = useRef(null);
+  const [viewMode, setViewMode] = useState<'clusters' | 'heatmap'>('clusters');
 
   // Centro de Fortaleza
   const center: [number, number] = [-3.745, -38.52];
@@ -124,8 +127,41 @@ export function MapView({ regions, focusRegion, onRegionClick }: MapViewProps) {
   // Top 3 regiões
   const top3Ids = new Set(regions.slice(0, 3).map((r) => r.id));
 
+  // Prepara dados do heatmap: [lat, lng, intensity (0-1)]
+  const heatmapData: Array<[number, number, number]> = gridPoints
+    ? gridPoints.map((gp) => [gp.lat, gp.lon, gp.score / 100])
+    : [];
+
   return (
     <div className="relative h-[320px] md:h-[400px] lg:h-[500px] w-full rounded-lg overflow-hidden border">
+      {/* Toggle de visualização */}
+      {gridPoints && gridPoints.length > 0 && (
+        <div className="absolute top-3 left-3 z-[1000] bg-white/95 backdrop-blur rounded-lg shadow-lg border">
+          <div className="flex gap-1 p-1">
+            <button
+              onClick={() => setViewMode('clusters')}
+              className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                viewMode === 'clusters'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'hover:bg-accent text-muted-foreground'
+              }`}
+            >
+              Clusters
+            </button>
+            <button
+              onClick={() => setViewMode('heatmap')}
+              className={`px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                viewMode === 'heatmap'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'hover:bg-accent text-muted-foreground'
+              }`}
+            >
+              Mapa de Calor
+            </button>
+          </div>
+        </div>
+      )}
+
       <MapContainer
         ref={mapRef}
         center={center}
@@ -143,7 +179,12 @@ export function MapView({ regions, focusRegion, onRegionClick }: MapViewProps) {
         <MapLegend />
         <FocusRegion region={focusRegion || null} />
 
-        {regions.map((region) => {
+        {/* Renderização condicional: heatmap OU clusters */}
+        {viewMode === 'heatmap' && heatmapData.length > 0 && (
+          <HeatmapLayer points={heatmapData} />
+        )}
+
+        {viewMode === 'clusters' && regions.map((region) => {
           const isTop3 = top3Ids.has(region.id);
           const color = getScoreColor(region.score);
 

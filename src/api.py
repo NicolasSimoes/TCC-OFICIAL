@@ -89,6 +89,14 @@ class ClusteringMetrics(BaseModel):
     dbscan_silhouette: Optional[float] = None
 
 
+class GridPoint(BaseModel):
+    """Representa um ponto da grade de 30 pontos de Fortaleza com score para heatmap."""
+    lat: float
+    lon: float
+    poi_count: int = Field(description="Número absoluto de POIs do nicho neste ponto")
+    score: float = Field(description="Score normalizado 0-100 para visualização")
+
+
 class AnalyzeResponse(BaseModel):
     produto: str
     analise: Analysis
@@ -98,6 +106,10 @@ class AnalyzeResponse(BaseModel):
     sazonalidade: Optional[List[int]] = Field(
         default=None,
         description="Índices sazonais mensais 0-100 (Jan-Dez) para o nicho",
+    )
+    grid_points: Optional[List[GridPoint]] = Field(
+        default=None,
+        description="Todos os 30 pontos da grade de Fortaleza com scores para heatmap",
     )
 
 
@@ -224,7 +236,7 @@ def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
         analise = analisar_produto_completo(payload.produto)
         nlp_info = identificar_nicho_com_confianca(payload.produto)
         filtros_dict = payload.filtros.model_dump()
-        regioes, metricas_raw = gerar_regioes_ideais_com_metricas(
+        regioes, metricas_raw, grid_points = gerar_regioes_ideais_com_metricas(
             payload.produto, filtros_dict, analise["nicho"]
         )
         metricas: Optional[ClusteringMetrics] = None
@@ -252,6 +264,7 @@ def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
             total_regioes=len(regioes),
             metricas_clustering=metricas,
             sazonalidade=SAZONALIDADE_BY_NICHE.get(analise["nicho"], SAZONALIDADE_BY_NICHE["Outro"]),
+            grid_points=[GridPoint(**gp) for gp in grid_points] if grid_points else None,
         )
     except HTTPException:
         raise
